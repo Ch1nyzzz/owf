@@ -1,5 +1,6 @@
 import type { ToolRegistry } from "../types.js";
 import { makePythonTool } from "./python.js";
+import { makeWebSearchTools } from "./websearch.js";
 
 /**
  * Harness-owned tool registry (DSL §7). Workflows select tools by name; the executor
@@ -12,6 +13,8 @@ export function buildRegistry(domain: string): ToolRegistry {
 	switch (domain) {
 		case "realmath":
 			return { python: makePythonTool() };
+		case "finsearch":
+			return { ...makeWebSearchTools(), python: makePythonTool() };
 		case "none":
 			return {};
 		default:

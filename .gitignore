@@ -16,3 +16,7 @@ data/realmath/*
 runs/
 *.tgz
 .pytest_cache/
+!data/finsearch/
+data/finsearch/*
+!data/finsearch/tasks.jsonl
+!data/finsearch/split.json

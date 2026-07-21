@@ -22,6 +22,19 @@ EXECUTOR = ROOT / "executor"
 INFRA_RETRIES = 2
 
 
+def load_dotenv() -> None:
+    """Load ROOT/.env without overriding existing env (graders need judge keys)."""
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return
+    import os, re
+
+    for line in env_file.read_text().splitlines():
+        m = re.match(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$", line)
+        if m and os.environ.get(m.group(1)) is None and m.group(2):
+            os.environ[m.group(1)] = m.group(2)
+
+
 def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
     data_dir = ROOT / "data" / domain
     tasks = [json.loads(l) for l in (data_dir / "tasks.jsonl").read_text().splitlines() if l.strip()]
@@ -38,31 +51,33 @@ def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
 def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, max_tokens: int, max_sec: int) -> dict:
     run_dir = out_dir / f"{task['id']}__r{rep}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    public = {k: v for k, v in task.items() if k != "gold"}
+    public = {k: v for k, v in task.items() if k not in ("gold", "judge_system", "judge_template")}
     task_file = run_dir / "task.json"
     task_file.write_text(json.dumps(public, ensure_ascii=False))
 
-    for attempt in range(INFRA_RETRIES + 1):
-        proc = subprocess.run(
-            [
-                "npx", "tsx", "src/run.ts",
-                "--workflow", str(workflow),
-                "--task", str(task_file),
-                "--out", str(run_dir),
-                "--domain", domain,
-                "--max-tokens", str(max_tokens),
-                "--max-wallclock-sec", str(max_sec),
-            ],
-            cwd=EXECUTOR,
-            capture_output=True,
-            text=True,
-            timeout=max_sec + 120,
-        )
-        if proc.returncode == 0:
-            break
-        if attempt == INFRA_RETRIES:
-            return {"task_id": task["id"], "rep": rep, "status": "infra_error", "score": 0.0, "tokens": {"input": 0, "output": 0}, "error": proc.stderr[-500:]}
-        time.sleep(5)
+    # resume: an existing verdict means the rollout is done; only grading re-runs
+    if not (run_dir / "result.json").exists():
+        for attempt in range(INFRA_RETRIES + 1):
+            proc = subprocess.run(
+                [
+                    "npx", "tsx", "src/run.ts",
+                    "--workflow", str(workflow),
+                    "--task", str(task_file),
+                    "--out", str(run_dir),
+                    "--domain", domain,
+                    "--max-tokens", str(max_tokens),
+                    "--max-wallclock-sec", str(max_sec),
+                ],
+                cwd=EXECUTOR,
+                capture_output=True,
+                text=True,
+                timeout=max_sec + 120,
+            )
+            if proc.returncode == 0:
+                break
+            if attempt == INFRA_RETRIES:
+                return {"task_id": task["id"], "rep": rep, "status": "infra_error", "score": 0.0, "tokens": {"input": 0, "output": 0}, "error": proc.stderr[-500:]}
+            time.sleep(5)
 
     summary = json.loads((run_dir / "result.json").read_text())
     grader = importlib.import_module(f"owf_bench.{domain}.grade")
@@ -71,7 +86,10 @@ def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, ma
         answer = summary["result"].get("answer")
     elif summary.get("result") is not None:
         answer = summary["result"]
-    correct, match_type = grader.grade(answer, task["gold"])
+    if hasattr(grader, "grade_task"):
+        correct, match_type = grader.grade_task(answer, task)
+    else:
+        correct, match_type = grader.grade(answer, task["gold"])
     return {
         "task_id": task["id"],
         "rep": rep,
@@ -143,4 +161,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT / "bench"))
+    load_dotenv()
     main()
