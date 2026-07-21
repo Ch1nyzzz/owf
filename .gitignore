@@ -9,6 +9,10 @@ data/*
 !data/tb2/
 data/tb2/*
 !data/tb2/split_v2.json
+!data/realmath/
+data/realmath/*
+!data/realmath/tasks.jsonl
+!data/realmath/split.json
 runs/
 *.tgz
 .pytest_cache/

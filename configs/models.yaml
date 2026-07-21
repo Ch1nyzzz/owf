@@ -27,7 +27,7 @@ models:
     model_id: Vendor3/DeepSeek-V4-Flash
     api_key_env: SOLVER_API_KEY
     context_window: 131072
-    max_tokens: 16384
+    max_tokens: 32768
     reasoning: false
     cost: { input: 0.14, output: 0.55 }
 

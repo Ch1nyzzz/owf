@@ -1,0 +1,146 @@
+"""Generic evaluation runner: workflow.js x task set -> (score, tokens) report.
+
+For each task (x k repeats): write a task.json WITHOUT gold (the workflow never
+sees the answer), spawn the Node executor, read result.json + journal, grade via
+the domain grader, aggregate. Infra errors (non-zero executor exit) are retried;
+candidate failures (workflow_error etc.) score 0.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+EXECUTOR = ROOT / "executor"
+INFRA_RETRIES = 2
+
+
+def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
+    data_dir = ROOT / "data" / domain
+    tasks = [json.loads(l) for l in (data_dir / "tasks.jsonl").read_text().splitlines() if l.strip()]
+    split = json.loads((data_dir / "split.json").read_text())
+    if subset in ("train", "test"):
+        wanted = set(split[subset])
+        tasks = [t for t in tasks if t["id"] in wanted]
+    elif subset != "all":
+        raise SystemExit(f"unknown subset: {subset}")
+    tasks.sort(key=lambda t: t["id"])
+    return tasks[:limit] if limit else tasks
+
+
+def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, max_tokens: int, max_sec: int) -> dict:
+    run_dir = out_dir / f"{task['id']}__r{rep}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    public = {k: v for k, v in task.items() if k != "gold"}
+    task_file = run_dir / "task.json"
+    task_file.write_text(json.dumps(public, ensure_ascii=False))
+
+    for attempt in range(INFRA_RETRIES + 1):
+        proc = subprocess.run(
+            [
+                "npx", "tsx", "src/run.ts",
+                "--workflow", str(workflow),
+                "--task", str(task_file),
+                "--out", str(run_dir),
+                "--domain", domain,
+                "--max-tokens", str(max_tokens),
+                "--max-wallclock-sec", str(max_sec),
+            ],
+            cwd=EXECUTOR,
+            capture_output=True,
+            text=True,
+            timeout=max_sec + 120,
+        )
+        if proc.returncode == 0:
+            break
+        if attempt == INFRA_RETRIES:
+            return {"task_id": task["id"], "rep": rep, "status": "infra_error", "score": 0.0, "tokens": {"input": 0, "output": 0}, "error": proc.stderr[-500:]}
+        time.sleep(5)
+
+    summary = json.loads((run_dir / "result.json").read_text())
+    grader = importlib.import_module(f"owf_bench.{domain}.grade")
+    answer = None
+    if isinstance(summary.get("result"), dict):
+        answer = summary["result"].get("answer")
+    elif summary.get("result") is not None:
+        answer = summary["result"]
+    correct, match_type = grader.grade(answer, task["gold"])
+    return {
+        "task_id": task["id"],
+        "rep": rep,
+        "status": summary["status"],
+        "score": 1.0 if correct else 0.0,
+        "match_type": match_type,
+        "tokens": summary["totalTokens"],
+        "durationMs": summary["durationMs"],
+        "answerPreview": str(answer)[:200],
+    }
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--domain", required=True)
+    p.add_argument("--workflow", required=True)
+    p.add_argument("--subset", default="train", help="train|test|all")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--repeats", type=int, default=1)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--out", required=True)
+    p.add_argument("--max-tokens", type=int, default=400_000)
+    p.add_argument("--max-wallclock-sec", type=int, default=900)
+    args = p.parse_args()
+
+    tasks = load_tasks(args.domain, args.subset, args.limit)
+    workflow = Path(args.workflow).resolve()
+    out_dir = Path(args.out).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    jobs = [(t, rep) for t in tasks for rep in range(args.repeats)]
+    print(f"{args.domain}/{args.subset}: {len(tasks)} tasks x {args.repeats} repeats = {len(jobs)} runs")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(run_one, t, workflow, args.domain, out_dir, rep, args.max_tokens, args.max_wallclock_sec): (t["id"], rep) for t, rep in jobs}
+        for i, fut in enumerate(as_completed(futures), 1):
+            r = fut.result()
+            results.append(r)
+            print(f"[{i}/{len(jobs)}] {r['task_id']} r{r['rep']} -> {r['score']:.0f} ({r.get('match_type', r['status'])}) tok={r['tokens']['input']}+{r['tokens']['output']}")
+
+    results.sort(key=lambda r: (r["task_id"], r["rep"]))
+    with (out_dir / "results.jsonl").open("w") as f:
+        for r in results:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    # per-task mean over repeats, then macro average
+    by_task: dict[str, list[dict]] = {}
+    for r in results:
+        by_task.setdefault(r["task_id"], []).append(r)
+    task_scores = {tid: sum(x["score"] for x in rs) / len(rs) for tid, rs in by_task.items()}
+    total_in = sum(r["tokens"]["input"] for r in results)
+    total_out = sum(r["tokens"]["output"] for r in results)
+    report = {
+        "workflow": str(workflow),
+        "domain": args.domain,
+        "subset": args.subset,
+        "n_tasks": len(by_task),
+        "repeats": args.repeats,
+        "score": sum(task_scores.values()) / len(task_scores) if task_scores else 0.0,
+        "tokens_total": {"input": total_in, "output": total_out},
+        "tokens_per_task": {"input": total_in // max(1, len(results)), "output": total_out // max(1, len(results))},
+        "statuses": {s: sum(1 for r in results if r["status"] == s) for s in {r["status"] for r in results}},
+        "task_scores": task_scores,
+    }
+    (out_dir / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False))
+    print(json.dumps({k: report[k] for k in ("score", "n_tasks", "tokens_per_task", "statuses")}, indent=1))
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(ROOT / "bench"))
+    main()
