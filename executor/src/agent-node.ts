@@ -46,6 +46,7 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 	const label = opts.label ?? `node-${seq}`;
 	const start = Date.now();
 	const nodeTokens = { input: 0, output: 0 };
+	let lastError: string | undefined;
 	const done = (result: string | object | null, status: NodeOutcome["status"], turns: number, messages?: AgentMessage[]): NodeOutcome => {
 		if (messages) deps.journal.nodeTranscript(seq, label, messages);
 		const outcome: NodeOutcome = { result, status, turns, tokens: { ...nodeTokens }, durationMs: Date.now() - start };
@@ -58,6 +59,7 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 			tokens: outcome.tokens,
 			durationMs: outcome.durationMs,
 			resultPreview: preview(result),
+			...(lastError ? { error: preview(lastError) } : {}),
 		});
 		return outcome;
 	};
@@ -220,6 +222,7 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 		switch (event.type) {
 			case "message_end": {
 				const m = event.message as AssistantMessage;
+				if ((m as { role?: string }).role === "assistant" && m.errorMessage) lastError = m.errorMessage;
 				if ((m as { role?: string }).role === "assistant" && m.usage) {
 					nodeTokens.input += m.usage.input ?? 0;
 					nodeTokens.output += m.usage.output ?? 0;
