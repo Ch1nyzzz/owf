@@ -20,3 +20,7 @@ runs/
 data/finsearch/*
 !data/finsearch/tasks.jsonl
 !data/finsearch/split.json
+!data/bcplus/
+data/bcplus/*
+!data/bcplus/tasks.jsonl
+!data/bcplus/split.json
