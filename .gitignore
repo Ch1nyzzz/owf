@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+__pycache__/
+*.pyc
+.venv/
+uv.lock
+data/*
+!data/tb2/
+data/tb2/*
+!data/tb2/split_v2.json
+runs/
+*.tgz
+.pytest_cache/

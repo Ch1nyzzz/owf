@@ -1,0 +1,56 @@
+# SUT model registry. Keys are the names workflow.js uses in agent({model}).
+# All endpoints are OpenAI-compatible (pi-ai api: openai-completions).
+# api_key_env names the environment variable holding the key — keys never live here.
+# cost: USD per 1M tokens (input/output), used for journal cost accounting only.
+
+models:
+  deepseek-chat:
+    base_url: https://api.deepseek.com
+    model_id: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    context_window: 131072
+    max_tokens: 8192
+    reasoning: false
+    cost: { input: 0.27, output: 1.10 }
+
+  deepseek-reasoner:
+    base_url: https://api.deepseek.com
+    model_id: deepseek-reasoner
+    api_key_env: DEEPSEEK_API_KEY
+    context_window: 131072
+    max_tokens: 32768
+    reasoning: true
+    cost: { input: 0.55, output: 2.19 }
+
+  deepseek-v4-flash:
+    base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
+    model_id: Vendor3/DeepSeek-V4-Flash
+    api_key_env: SOLVER_API_KEY
+    context_window: 131072
+    max_tokens: 16384
+    reasoning: false
+    cost: { input: 0.14, output: 0.55 }
+
+  minimax-m3:
+    base_url: https://api.together.xyz/v1
+    model_id: MiniMaxAI/MiniMax-M3
+    api_key_env: TOGETHER_API_KEY
+    context_window: 262144
+    max_tokens: 16384
+    reasoning: true
+    cost: { input: 0.55, output: 2.20 }
+
+  kimi-k2:
+    base_url: https://api.moonshot.cn/v1
+    model_id: kimi-k2-0711-preview
+    api_key_env: KIMI_API_KEY
+    context_window: 131072
+    max_tokens: 16384
+    reasoning: false
+    cost: { input: 0.60, output: 2.50 }
+
+# Judge model (bench-side grading, not selectable from workflows)
+judge:
+  base_url: ${JUDGE_BASE_URL:-https://api.deepseek.com}
+  model_id: ${JUDGE_MODEL:-deepseek-chat}
+  api_key_env: JUDGE_API_KEY

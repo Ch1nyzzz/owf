@@ -1,0 +1,25 @@
+{
+  "name": "owf-executor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "owf thin harness: runs one workflow.js against one task on the pi agent loop",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "run": "tsx src/run.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.81.1",
+    "@earendil-works/pi-ai": "0.81.1",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
