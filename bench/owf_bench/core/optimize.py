@@ -75,6 +75,10 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"Current frontier workflow: {frontier['workflow']} — train score {frontier['score']} "
             f"(noise band ±{state.get('noise_band', 0.04)}), tokens/task {frontier.get('tokens_per_task')}.\n"
             f"Frontier eval report (per-task scores): {frontier.get('report')}\n"
+            f"Parent choice is YOURS: you may base the new candidate on the frontier, on any earlier "
+            f"candidate (iter_*/candidate.js, each with its eval report), or graft pieces across them — "
+            f"rejected candidates often contain good ideas that didn't clear the noise bar alone. "
+            f"State your chosen parent(s) in your notes.\n"
             f"Rollout journals for any evaluated run are next to its report (task dirs with journal.jsonl and node transcripts).\n"
             f"Study the evidence, then write an improved candidate via write_workflow, update your notes, and submit your summary."
         ),
