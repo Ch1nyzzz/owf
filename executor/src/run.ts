@@ -30,8 +30,21 @@ async function main(): Promise<number> {
 			models: { type: "string" },
 			"max-tokens": { type: "string", default: "400000" },
 			"max-wallclock-sec": { type: "string", default: "1800" },
+			"validate-only": { type: "string" },
 		},
 	});
+
+	// validation gate for external callers (watchdog rewrites, CI): parse + shape only
+	if (values["validate-only"]) {
+		try {
+			const wf = loadWorkflow(values["validate-only"]);
+			console.log(`OK ${wf.meta.name}`);
+			return 0;
+		} catch (err) {
+			console.error(`INVALID: ${String(err)}`);
+			return 1;
+		}
+	}
 
 	if (!values.workflow || !values.task || !values.out) {
 		console.error("usage: run.ts --workflow wf.js --task task.json --out dir [--domain d] [--models models.yaml]");
@@ -51,7 +64,7 @@ async function main(): Promise<number> {
 		task = JSON.parse(readFileSync(values.task, "utf8")) as TaskPayload;
 		journal = new Journal(values.out);
 		models = loadModels(modelsPath);
-		tools = buildRegistry(values.domain ?? "none");
+		tools = buildRegistry(values.domain ?? "none", task);
 	} catch (err) {
 		console.error(`infra error: ${String(err)}`);
 		return 2;
