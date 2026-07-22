@@ -164,7 +164,10 @@ def main() -> None:
     p.add_argument("--seed-workflow", required=True, help="starting frontier workflow")
     p.add_argument("--baseline-run", required=True, help="k>=3 baseline run dir (report.json + stability.json)")
     p.add_argument("--eval-limit", type=int, help="tasks per candidate eval (default: full train)")
-    p.add_argument("--eval-repeats", type=int, default=3)
+    # Protocol: k=3 is spent exactly twice — pre-run stability measurement (source of the
+    # noise band) and final champion confirmation. Inside the loop k=1 + the noise-band
+    # acceptance threshold carries the statistical load.
+    p.add_argument("--eval-repeats", type=int, default=1)
     p.add_argument("--eval-workers", type=int, default=32)
     p.add_argument("--opt-model", default="kimi-k2")
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
