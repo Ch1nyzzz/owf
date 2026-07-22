@@ -119,7 +119,7 @@ A1 bcplus 0/3 排查 → A2 M3 TB2 桥接 + parity 校验(0.45±0.04)→ A3 DSL 
 B1 特权工具(§三清单;矩阵/分桶聚合器)→ B2 optimizer.js v1(单强节点起步)+ skill(§四忠告全文)
 → B3 realmath 首轮优化实验(优化器冻结,与 0.424±0.054 基线配对比较)
 **k 协议**:k=3 只花两处——赛前稳定性测量(噪声带来源)与终局冠军确认(含 test 集);
-循环内一律 k=1,接受门槛 delta > 噪声带。
+循环内一律 k=1,分数只作记账与优化器证据(无中途认证门槛;frontier=当前实测最高的记账指针);运气清算全部放在终局 k=3+test。
 
 ### Phase C — Watchdog
 C1 机械健康谓词 + meta-journal 聚合 → C2 watchdog.js + 事务写入 CI + 回滚演练
