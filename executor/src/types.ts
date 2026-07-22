@@ -6,6 +6,8 @@ export interface ModelEntry {
 	key: string;
 	model: Model<any>;
 	apiKey: string | undefined;
+	/** Dynamic key resolution (e.g. Codex OAuth token re-read per call). */
+	resolveKey?: () => string | undefined;
 }
 
 /** Read-only rollout view passed to hooks (DSL §3.2). */
@@ -54,7 +56,7 @@ export interface AgentOpts {
 	tools?: Array<string | AgentTool<any>>;
 	maxTurns?: number;
 	temperature?: number;
-	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high";
+	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	schema?: object;
 	label?: string;
 	hooks?: WorkflowHooks;

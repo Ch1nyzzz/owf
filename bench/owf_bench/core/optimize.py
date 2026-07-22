@@ -63,7 +63,7 @@ def evaluate(workflow: Path, domain: str, out_dir: Path, limit: int | None, repe
     return json.loads(report_path.read_text())
 
 
-def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str) -> dict:
+def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str) -> dict:
     frontier = state["frontier"]
     stability = opt_root / "evidence/stability.json"
     return {
@@ -88,6 +88,7 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
         "candidate_path": str(opt_root / f"iter_{it:03d}/candidate.js"),
         "bench_root": str(ROOT / "bench"),
         "opt_model": opt_model,
+        "opt_thinking": opt_thinking,
     }
 
 
@@ -123,6 +124,7 @@ def run_watchdog(opt_root: Path, domain: str, it: int, predicates: list[str], op
         "candidate_path": str(wd_dir / "unused.js"),
         "bench_root": str(ROOT / "bench"),
         "opt_model": opt_model,
+        "opt_thinking": "xhigh",
     }
     task_file = wd_dir / "task.json"
     task_file.write_text(json.dumps(task))
@@ -173,7 +175,8 @@ def main() -> None:
     # acceptance threshold carries the statistical load.
     p.add_argument("--eval-repeats", type=int, default=1)
     p.add_argument("--eval-workers", type=int, default=32)
-    p.add_argument("--opt-model", default="deepseek-v4-pro")
+    p.add_argument("--opt-model", default="gpt-5.6-terra")
+    p.add_argument("--opt-thinking", default="xhigh")
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
     p.add_argument("--opt-max-sec", type=int, default=5400)
     args = p.parse_args()
@@ -217,7 +220,7 @@ def main() -> None:
         iter_dir = opt_root / f"iter_{it:03d}"
         (iter_dir / "opt").mkdir(parents=True, exist_ok=True)
 
-        task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model)
+        task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking)
         task_file = iter_dir / "opt_task.json"
         task_file.write_text(json.dumps(task))
         t0 = time.time()

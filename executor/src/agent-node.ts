@@ -147,8 +147,11 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 	const config: AgentLoopConfig = {
 		model: entry.model,
 		apiKey: entry.apiKey,
-		temperature: opts.temperature ?? 0.0,
-		reasoning: opts.thinkingLevel && opts.thinkingLevel !== "off" ? opts.thinkingLevel : undefined,
+		getApiKey: entry.resolveKey ? () => entry.resolveKey!() : undefined,
+		// the Codex responses API rejects temperature outright
+		temperature: entry.model.api === "openai-codex-responses" ? undefined : (opts.temperature ?? 0.0),
+		// thinkingLevel is dropped for non-reasoning models (openai-compat endpoints may reject the param)
+		reasoning: opts.thinkingLevel && opts.thinkingLevel !== "off" && entry.model.reasoning ? opts.thinkingLevel : undefined,
 		convertToLlm: (messages) => messages as Message[],
 
 		beforeToolCall: async ({ toolCall, args }) => {

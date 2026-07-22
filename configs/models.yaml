@@ -3,18 +3,24 @@
 # api_key_env names the environment variable holding the key — keys never live here.
 # cost: USD per 1M tokens (input/output), used for journal cost accounting only.
 
-# Roster locked 2026-07-22 (user decision): DeepSeek V4 two-tier only.
-#   deepseek-v4-flash = the cheap execution tier (gpugeek)
-#   deepseek-v4-pro   = the strong reasoning tier (Together; gpugeek binding pending)
+# Roster locked 2026-07-22 (user decision):
+#   SUT tiers (both gpugeek): deepseek-v4-flash = cheap execution, deepseek-v4-pro = strong reasoning
+#     NOTE: V4-Pro currently returns "model not bound to requested spec" on gpugeek —
+#     bind it in the console before running workflows that route to it.
+#   Optimizer/watchdog: gpt-5.6-terra via the Codex coding-plan subscription (OAuth, xhigh)
 models:
   deepseek-v4-pro:
-    base_url: https://api.together.xyz/v1
-    model_id: deepseek-ai/DeepSeek-V4-Pro
-    api_key_env: TOGETHER_API_KEY
+    base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
+    model_id: Vendor3/DeepSeek-V4-Pro
+    api_key_env: SOLVER_API_KEY
     context_window: 131072
     max_tokens: 32768
     reasoning: true
-    cost: { input: 1.20, output: 4.00 }   # approximate, reconcile with Together billing
+    cost: { input: 0.55, output: 2.20 }   # approximate, reconcile with gpugeek console
+
+  gpt-5.6-terra:
+    catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
+    auth: codex                            # ~/.codex/auth.json OAuth token, re-read per call
 
   deepseek-v4-flash:
     base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
