@@ -226,16 +226,27 @@ def main() -> None:
         }
 
         if made:
-            report = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, args.eval_repeats, args.eval_workers)
-            if report:
-                delta = report["score"] - state["frontier"]["score"]
-                accepted = delta > state["noise_band"]
-                rec.update({"candidate_score": report["score"], "delta": round(delta, 4), "accepted": accepted,
-                            "candidate_tokens_per_task": report["tokens_per_task"]})
+            # two-stage eval: k=1 screen (cheap), k=eval_repeats confirm only if promising.
+            # Screening can miss a good candidate that gets unlucky at k=1 — accepted tradeoff;
+            # the same run dir is reused so the confirm resumes r0 instead of re-running it.
+            screen = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, 1, args.eval_workers)
+            if screen:
+                rec["screen_score"] = screen["score"]
+                promising = screen["score"] > state["frontier"]["score"]
+                report = None
+                if promising and args.eval_repeats > 1:
+                    report = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, args.eval_repeats, args.eval_workers)
+                final = report or screen
+                delta = final["score"] - state["frontier"]["score"]
+                confirmed = report is not None or args.eval_repeats == 1
+                accepted = confirmed and delta > state["noise_band"]
+                rec.update({"candidate_score": final["score"], "delta": round(delta, 4), "accepted": accepted,
+                            "confirmed_k": args.eval_repeats if report else 1,
+                            "candidate_tokens_per_task": final["tokens_per_task"]})
                 if accepted:
-                    state["frontier"] = {"workflow": str(candidate), "score": report["score"],
-                                         "tokens_per_task": report["tokens_per_task"], "report": str(iter_dir / "eval/report.json")}
-                print(f"  candidate {report['score']:.3f} (delta {delta:+.3f}) -> {'ACCEPTED' if accepted else 'rejected'}")
+                    state["frontier"] = {"workflow": str(candidate), "score": final["score"],
+                                         "tokens_per_task": final["tokens_per_task"], "report": str(iter_dir / "eval/report.json")}
+                print(f"  candidate screen {screen['score']:.3f}" + (f" confirm {final['score']:.3f}" if report else "") + f" (delta {delta:+.3f}) -> {'ACCEPTED' if accepted else 'rejected'}")
             else:
                 rec.update({"candidate_score": None, "accepted": False, "eval_failed": True})
         rec["frontier_score_after"] = state["frontier"]["score"]

@@ -32,6 +32,22 @@ def build(run_dir: Path) -> dict:
     mean = sum(per_run_scores) / len(per_run_scores) if per_run_scores else 0.0
     var = sum((x - mean) ** 2 for x in per_run_scores) / len(per_run_scores) if per_run_scores else 0.0
 
+    # failure-cause strata for stable-fail tasks (data for the optimizer, no advice)
+    causes: dict[str, list[str]] = {}
+    for r in results:
+        if r["task_id"] in set(stable_fail):
+            causes.setdefault(r["task_id"], []).append(r.get("match_type", r.get("status", "?")))
+    def bucket(cs: list[str]) -> str:
+        n = {c: cs.count(c) for c in set(cs)}
+        if n.get("no_answer", 0) * 2 >= len(cs):
+            return "no_answer"
+        if (n.get("judge_confirmed_mismatch", 0) + n.get("mismatch", 0)) * 2 >= len(cs):
+            return "wrong_answer"
+        if n.get("arity_mismatch", 0) * 2 >= len(cs):
+            return "arity"
+        return "mixed"
+    stable_fail_causes = {t: bucket(cs) for t, cs in causes.items()}
+
     return {
         "k": k,
         "n_tasks": len(seqs),
@@ -40,6 +56,8 @@ def build(run_dir: Path) -> dict:
         "noise_band": round(var ** 0.5, 4),
         "stable_pass": stable_pass,
         "stable_fail": stable_fail,
+        "stable_fail_causes": stable_fail_causes,
+        "stable_fail_cause_counts": {b: list(stable_fail_causes.values()).count(b) for b in set(stable_fail_causes.values())},
         "oscillating": oscillating,
         "counts": {"stable_pass": len(stable_pass), "stable_fail": len(stable_fail), "oscillating": len(oscillating)},
         "sequences": seqs,
