@@ -39,11 +39,19 @@ export interface WorkflowHooks {
 	onStop?: (state: HookState) => Promise<{ continue?: string } | undefined | void> | { continue?: string } | undefined | void;
 }
 
-/** agent() options (DSL §3). */
+/** A workflow-defined tool (DSL §7.1): interface + composition over harness primitives. */
+export interface DefinedToolSpec {
+	name: string;
+	description: string;
+	schema: object;
+	handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
+}
+
+/** agent() options (DSL §3). Tools: registry names and/or defineTool handles. */
 export interface AgentOpts {
 	system: string;
 	model: string;
-	tools?: string[];
+	tools?: Array<string | AgentTool<any>>;
 	maxTurns?: number;
 	temperature?: number;
 	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high";
@@ -74,6 +82,8 @@ export interface WorkflowCtx {
 	agent: (prompt: string, opts: AgentOpts) => Promise<string | object | null>;
 	pipeline: (items: unknown[], ...stages: Array<(prev: unknown, item: unknown, index: number) => unknown>) => Promise<unknown[]>;
 	parallel: (thunks: Array<() => Promise<unknown>>) => Promise<unknown[]>;
+	defineTool: (spec: DefinedToolSpec) => AgentTool<any>;
+	runTool: (name: string, args: Record<string, unknown>) => Promise<string>;
 	log: (message: string) => void;
 	budget: {
 		totalTokens: number;

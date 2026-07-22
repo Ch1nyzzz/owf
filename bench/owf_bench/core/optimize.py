@@ -173,7 +173,7 @@ def main() -> None:
     # acceptance threshold carries the statistical load.
     p.add_argument("--eval-repeats", type=int, default=1)
     p.add_argument("--eval-workers", type=int, default=32)
-    p.add_argument("--opt-model", default="kimi-k2")
+    p.add_argument("--opt-model", default="deepseek-v4-pro")
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
     p.add_argument("--opt-max-sec", type=int, default=5400)
     args = p.parse_args()
@@ -187,6 +187,7 @@ def main() -> None:
     if not stability_src.exists():
         raise SystemExit(f"stability.json missing in {baseline} — run stability.py first (k>=3 gate)")
     shutil.copy(stability_src, opt_root / "evidence/stability.json")
+    shutil.copy(ROOT / "docs/DSL.md", opt_root / "evidence/DSL.md")  # the action-space reference
     stability = json.loads(stability_src.read_text())
     base_report = json.loads((baseline / "report.json").read_text())
 

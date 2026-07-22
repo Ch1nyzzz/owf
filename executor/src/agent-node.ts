@@ -70,13 +70,20 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 		return done(null, "error", 0);
 	}
 	const tools = [];
-	for (const name of opts.tools ?? []) {
-		const tool = deps.tools[name];
-		if (!tool) {
-			deps.journal.write({ type: "node_start", node: label, seq, model: opts.model, error: `unknown_tool:${name}` });
+	for (const entry of opts.tools ?? []) {
+		if (typeof entry === "string") {
+			const tool = deps.tools[entry];
+			if (!tool) {
+				deps.journal.write({ type: "node_start", node: label, seq, model: opts.model, error: `unknown_tool:${entry}` });
+				return done(null, "unknown_tool", 0);
+			}
+			tools.push(tool);
+		} else if (entry && typeof entry === "object" && typeof entry.execute === "function" && typeof entry.name === "string") {
+			tools.push(entry); // defineTool handle
+		} else {
+			deps.journal.write({ type: "node_start", node: label, seq, model: opts.model, error: "unknown_tool:invalid_handle" });
 			return done(null, "unknown_tool", 0);
 		}
-		tools.push(tool);
 	}
 
 	let submitted: object | null = null;
@@ -93,7 +100,7 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 		node: label,
 		seq,
 		model: opts.model,
-		tools: opts.tools ?? [],
+		tools: (opts.tools ?? []).map((t) => (typeof t === "string" ? t : `defined:${t.name}`)),
 		maxTurns,
 		has_schema: Boolean(opts.schema),
 		hook_names: Object.keys(hooks),

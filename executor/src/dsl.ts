@@ -1,8 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
 import { runAgentNode } from "./agent-node.js";
 import type { Budget } from "./budget.js";
 import { Journal, preview } from "./journal.js";
-import type { AgentOpts, ModelEntry, TaskPayload, ToolRegistry, WorkflowCtx } from "./types.js";
+import type { AgentOpts, DefinedToolSpec, ModelEntry, TaskPayload, ToolRegistry, WorkflowCtx } from "./types.js";
 
 const AGENT_CONCURRENCY = 8;
 
@@ -110,11 +110,46 @@ export function buildCtx(deps: CtxDeps): WorkflowCtx {
 		);
 	};
 
+	// DSL §7.1: workflow-defined tools — new interfaces/compositions over existing
+	// capabilities. The handler is workflow JS and may call ctx.agent (an agent AS a
+	// tool) or ctx.runTool (compose harness primitives). No new side-effect channels.
+	const defineTool = (spec: DefinedToolSpec): AgentTool<any> => {
+		if (!spec || typeof spec.name !== "string" || typeof spec.handler !== "function" || !spec.schema) {
+			throw new Error("defineTool({name, description, schema, handler}): all fields required");
+		}
+		return {
+			name: spec.name,
+			label: spec.name,
+			description: String(spec.description ?? ""),
+			parameters: spec.schema as never,
+			execute: async (_id, params) => {
+				const result = await spec.handler(params as Record<string, unknown>);
+				const textOut = typeof result === "string" ? result : JSON.stringify(result ?? null);
+				return { content: [{ type: "text", text: textOut }], details: {} };
+			},
+		};
+	};
+
+	const runTool = async (name: string, args: Record<string, unknown>): Promise<string> => {
+		const tool = deps.tools[name];
+		if (!tool) throw new Error(`runTool: unknown harness tool '${name}'`);
+		const t0 = Date.now();
+		const result = await tool.execute(`direct-${Date.now()}`, args as never, deps.signal);
+		const textOut = result.content
+			.filter((c): c is Extract<typeof c, { type: "text" }> => c.type === "text")
+			.map((c) => c.text)
+			.join("\n");
+		deps.journal.write({ type: "tool_call", node: "runTool", tool: name, argsPreview: preview(args).slice(0, 400), resultPreview: preview(textOut).slice(0, 400), isError: false, durationMs: Date.now() - t0 });
+		return textOut;
+	};
+
 	return {
 		task: Object.freeze(structuredClone(deps.task)),
 		agent,
 		pipeline,
 		parallel,
+		defineTool,
+		runTool,
 		log: (message: string) => deps.journal.write({ type: "log", message: preview(String(message)) }),
 		budget: {
 			totalTokens: deps.budget.maxTokens,

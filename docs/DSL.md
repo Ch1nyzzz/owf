@@ -130,6 +130,28 @@ node fails → `null`).
   `Function` constructor. Elapsed time is available via `ctx.budget.elapsedMs()` / `state.elapsedMs`.
 - `meta` must be a pure literal.
 
+## 7.1 Workflow-defined tools (v1.1, 2026-07-22)
+
+Side-effect *primitives* stay harness-owned; tool *interfaces and compositions* are
+workflow-definable:
+
+```js
+const verify = ctx.defineTool({
+  name: 'verify_symbolic',
+  description: 'Check two sympy expressions for equivalence',
+  schema: { type: 'object', properties: { a: {type:'string'}, b: {type:'string'} }, required: ['a','b'] },
+  handler: async ({ a, b }) => ctx.runTool('python', { code: `from sympy import *\nprint(simplify((${a})-(${b}))==0)` }),
+})
+await ctx.agent(prompt, { ..., tools: ['python', verify] })  // handles mix with registry names
+```
+
+- `handler(args)` is workflow JS: may call `ctx.agent` (an agent AS a tool) or
+  `ctx.runTool(name, args)` (direct invocation of a harness primitive; journaled).
+- Handler return value: string passthrough, anything else JSON-stringified.
+- A handler that throws surfaces as an error tool result to the calling node (loop semantics).
+- Cheating boundary unchanged: no new side-effect channels, no out-of-rule information
+  sources, no bypassing token accounting.
+
 ## 7. Tool registry (harness-owned)
 
 Workflows can only *select* tools by name; definitions live in the executor. Per-domain sets:

@@ -18,7 +18,7 @@ export default async function run(ctx) {
       'A rewrite without cited evidence is invalid. "A different approach might work better" is not evidence.',
       'If you rewrite: keep the module shape (`export const meta` + `export default async function run(ctx)`), keep the same tool names, and keep the system prompt principles unless they are the diagnosed problem.',
     ].join('\n'),
-    model: t.opt_model || 'kimi-k2',
+    model: t.opt_model || 'deepseek-v4-pro',
     tools: ['read_file', 'list_dir'],
     maxTurns: 40,
     temperature: 0.0,
