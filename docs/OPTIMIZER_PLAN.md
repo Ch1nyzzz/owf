@@ -1,116 +1,135 @@
-# owf 优化器与 RSI 层设计计划
+# owf 优化器与 RSI 层设计(v2,第一性原理版)
 
-状态: 2026-07-22 定稿(基于两天设计讨论)。本文档是优化器阶段的锚点;实现顺序见末节。
-
----
-
-## 一、已定型的设计决策
-
-### D1. 工具边界(修订版)
-- **副作用原语归 harness(冻结)**: 进程/网络/文件系统的实际通道(python 沙箱、搜索 API、终端 exec)。这是安全与计费边界。
-- **工具接口与组合归 workflow(可进化)**: 优化器可通过 `ctx.defineTool({name, description, schema, handler})` 定义新工具,handler 为 JS 闭包,可调 `ctx.agent`(LLM 实现的工具)或 `ctx.runTool`(组合既有原语)。→ **DSL v1.1**,必须在首轮优化 run 前落地。
-- **作弊三禁区**: 逃出沙箱 / 访问评测规则外的信息源(如 realmath 联网搜答案)/ 绕过 token 计费。其余全开放。
-- 环境供给(装 SageMath 二进制等)是人做的 harness 决策,进版本记录。
-
-### D2. 优化器 = 自托管元 workflow(同构自举)
-- `workflows/_meta/optimizer.js`,跑在同一个 executor 上,零架构分叉。与对象级 workflow 的差异只有配置:特权工具注册表、更大预算、可写持久态文件。
-- **特权工具注册表**(harness 提供,机械强制边界):
-  - `read_matrix` — iter × task × (score, tokens, 末节点状态) 聚合矩阵
-  - `read_buckets` — 失败模式分桶统计
-  - `read_journal(iter, task, node?)` — 按需拉取任意轨迹(runs/ 只读,**权限全开,取证按需**)
-  - `read_workflow(iter)` / `diff_workflows(a, b)`
-  - `write_workflow` — **事务性写入**: 静态验证(loadWorkflow 门)→ 罐头轮冒烟 → 落盘,任何一关失败退回错误
-  - `run_probe` — 带预算帽的小样本评估发起
-- proposer 模型可配置,首轮用强模型,后续可做全开源消融。不依赖 Claude Code/Codex CLI。
-
-### D3. 记忆与长上下文:外置文件 + 编排,不用 compaction
-- 跨轮记忆 = 文件: belief ledger、gap 池、frontier manifest。可 diff、可回滚、进 git;每次优化器调用无状态冷启动。
-- 单次调用内证据过长 → 用编排解决(matrix 节点 → 按失败簇 parallel triage 节点 → synthesize 节点),不给 loop 加 compaction。**优化器自己的上下文问题必须用我们主张的编排范式解决,否则自相矛盾。**
-- 留口: `_meta` 域可按需单独暴露 transformContext 截断,数据逼出来再开。
-
-### D4. 诊断协议(双产物 + 五元标注 + 双环)
-- 每轮诊断强制两个独立节点、两份产物:
-  - **归因报告**(快环): 图内坐标、因果链、修复提案;实例级证据即可行动(小步:prompt/预算/接口)。
-  - **缺口假设**(慢环): 反事实形式("若存在结构/能力 X,这类失败不可能")。**不直接触发动作,入 gap 池。**
-- **五元标注**(每个 patch 必带): 改动轴 / 触发失败模式 / 假设 / 预测(per-task flips + token 轴)/ 实测。
-  - 六轴枚举: 节点 prompt(SP)| 拓扑 | 模型路由 | 工具选用与定义 | 预算(maxTurns/token)| hooks(rails)。
-- **gap 池晋级双条件**: 同簇假设 ≥3 次独立提出 + 分数矩阵弱区佐证,才触发结构编辑。
-- **co-adaptation 恩赦**: 拓扑/路由类候选首评不判死,自动获得一轮参数跟进再定去留(治"结构尝试全灭→绝迹"病)。
-- 统计卫生: k≥3 重复、配对比较、只认超出噪声带的 delta、修失败模式不修失败实例。
-
-### D5. RSI 塔(三层,逐层更简单、失败代价更低)
-```
-对象级   workflows/{domain}/candidate.js   ← optimizer.js 优化(L0)
-元级     workflows/_meta/optimizer.js      ← watchdog 修复/纠偏(L1)
-元元级   workflows/_meta/watchdog.js       ← 手写、冻结、单节点,塔顶,无人再看它
-```
-- **watchdog 触发 = 机械谓词**(harness 从 meta-journal 计算,LLM 不参与触发):
-  - 运行病理: 连续 N 轮无候选 / budget_exceeded / evidence 节点 schema_failed 率超阈 / ledger 零写入 / probe 从未发起
-  - 停滞: frontier 在噪声带外无移动、连续 ≥5 轮(噪声带由 k 次重复估计)
-- **停滞触发后走过程审计清单**(全部一阶可观测,判例来自 WorldCalib 实史):
-  1. 编辑分布坍缩(连续 N 轮 100% 参数级,零结构尝试)← TTS 审计
-  2. 重试已标 EXHAUSTED 的假设家族 ← critic 时代
-  3. 追逐震荡任务(patch 瞄准重复运行间 0↔1 的题)← webshop
-  4. 校准断裂(flip 预测系统性落空但 belief 不更新)← optimizer's curse
-  5. gap 池失活(只进不出/从不产出缺口假设)
-  6. 取证病理(从不拉 journal / 反复拉同几条)
-- **三种裁决**: 清单无命中 → "健康停滞"(疑似天花板/噪声),不动优化器,升级人工;命中 → 改写 optimizer.js,改写说明必须引用具体证据;运行病理 → 修复通道。
-- **护栏**: 事务写入+罐头轮 CI;git 版本化+自动回滚 last-known-good;策略改写限速(每 ≥10 轮至多一次);回滚从宽(出现新病理或候选产出下降才回滚,"还没涨分"不回滚);两臂实验中 watchdog 对称配置,每次介入=ledger 版本事件,逐 iteration 报告版本号。
-- **L2 以上(watchdog 之上/优化器优化优化器以求"更强")锁死**: 二阶信号衰减,不做。
-
-### D6. 缺口词汇来源(反本体论闭包)
-- 自己的轨迹永远不含"从未存在的步骤";两个外部词汇来源:
-  1. 缺口假设 prompt(反事实设计,含对**成功**轨迹的"哪里靠运气"审视)
-  2. **参照轨迹 diff**: 同一 SUT 模型、无约束裸 ReAct、抽样 5-10 题,diff 出"它做而我们从不做"的行为。**必须同模型**(否则=蒸馏,污染 claim)。先手工试点一次再决定是否自动化。
-- 模式库(docs/PATTERNS.md)= 静态先验版本,两者互补。
-
-### D7. 基线诚实性纪律(realmath 0.197→0.500 的教训,升级为全域标准)
-每个域的 parity 种子定稿前必须过**失败构成拆解**审查: maxTurns/预算/超时死亡占比、判分假阴性抽查。基线配置压模型 = 虚报优化增益。
+状态: 2026-07-22 重写。v1 的机制堆(双产物节点/gap 池引擎/五元 schema/恩赦规则/参照轨迹)已撤销,
+理由见 §四;git 历史保留 v1 供追溯。
 
 ---
 
-## 二、当前状态(2026-07-22)
+## 一、问题的第一性分解
+
+本质问题:**用一个 LLM agent,对一个程序(workflow.js),在昂贵且有噪声的评估下做搜索。**
+
+不可约组件只有四个:
+
+1. **可信的测量** — k 次重复、配对比较、噪声带估计。没有它,一切增益都是幻觉。
+2. **完整的证据访问** — agent 能随机访问任何历史轨迹、分数、diff。
+3. **编辑与试错能力** — 能改 workflow 文件、能发起带预算帽的小样本评估。
+4. **跨轮记忆** — 一份 agent 自己维护的笔记,否则每轮从零开始。
+
+其余一切都是"如何当一个好优化器"的**经验建议**,归属在 skill 文本里,不建成系统机制。
+
+## 二、硬机制(harness 强制 —— 只因 prompt 保证不了)
+
+| 机制 | 实现 | 状态 |
+|---|---|---|
+| 测量 | runner 的 k 重复 + 配对 + 噪声带 | 已有(k 默认待升 3) |
+| 写入门 | `write_workflow` 事务:静态验证(loadWorkflow)→ 罐头轮冒烟 → 落盘;坏文件落不了地 | 待建 |
+| 边界 | 特权工具注册表只开 workflows/ 写、runs/ 读;优化器机械上碰不到 harness 代码 | 待建 |
+| 预算 | 每轮优化 token/墙钟硬顶 | 已有(executor budget) |
+| 版本化 | 每次改动 = git commit;回滚 = revert | 已有(git) |
+
+## 三、优化器本体:一个自由的强 agent
+
+`workflows/_meta/optimizer.js` —— 同一 executor 上的普通 workflow,起步可以就是**单个强模型节点**
+(证据太长时才用编排分诊:按失败簇并行细读 → 汇总节点只读结论,即 triage→synthesize)。
+
+特权工具:
+- `read_matrix` — iter × task × (score, tokens, 末节点状态) 聚合
+- `read_buckets` — 失败模式分桶统计
+- `read_journal(iter, task, node?)` — 任意轨迹按需拉取(权限全开,取证按需)
+- `read_workflow(iter)` / `diff_workflows(a, b)`
+- `write_workflow` / `run_probe`(带预算帽)
+- `notes` — 读写自己的 NOTES.md(格式自定,agent 自己进化自己的记法)
+
+跨轮记忆 = NOTES.md 等外置文件(可 diff、可回滚、进 git),每轮无状态冷启动读回。
+**不用 compaction/session**:优化器自己的长上下文问题必须用编排解决,否则与项目主张自相矛盾。
+
+## 四、Skill 忠告(原则 + 判例,不是规则引擎)
+
+总纲:**凡是能用"去查证据"回答的问题,不要用"定规矩"回答。**(v1 的 gap 池计数、恩赦轮数
+等配额机制,全部是证据受限假设下的发明;我们的证据访问全开,配额退化为查证纪律。)
+
+1. **改前立假设与预测,改后对账。** 预测到 per-task 粒度(哪几题会翻、token 变化多少);
+   实测与预测的偏差是唯一的学习信号,预测老落空说明对失败原因的理解是错的。
+   (= WorldCalib per-task-flip 协议,已验证。)
+2. **失败的两个方向都要想**:组件坏了(归因:哪个节点干砸了)与组件缺了(缺口:什么节点的
+   存在会让这类失败不可能)。归因证据便宜,不自觉就会挤掉缺口思考——两个方向都写进笔记。
+3. **结构假设:动手前先回查历史。** 一条轨迹引出的结构想法,立刻去检索全部历史轨迹验证
+   是否成类;历史答不了的才花小样本探针。读轨迹免费,优化轮昂贵——先穷尽回溯验证。
+4. **结构候选按机制层评价,不只看总分。** 新节点自己的子目标达成了吗?(拆解节点拆得好不好,
+   与总分是两个问题。)机制成立而整合不佳 → 留着修整合;机制本身失败 → 弃并记档防重试。
+   (= WorldCalib mechanism-effect 协议的推广:Behavioral check 与 Aggregate check 分开判。)
+5. **统计卫生**:单次失败是弱证据;修失败模式,不修失败实例;只认噪声带外的 delta;
+   震荡任务(重复运行 0↔1)不作为 patch 依据。
+6. **已知堕落模式判例**(全部来自 WorldCalib 实史,写进 skill 当反面教材):
+   编辑分布坍缩成纯 prompt 抛光(TTS 审计)/ 重试已否证假设(critic 时代)/
+   追逐噪声任务(webshop)/ 预测落空却不更新信念(optimizer's curse)/
+   只看聚合从不细读轨迹(evidence 审计)。
+
+工具边界(维持 v1 的 D1):副作用原语归 harness 冻结;工具接口与组合可由 workflow 通过
+`defineTool`/`runTool` 自定义(DSL v1.1);作弊三禁区 = 逃沙箱 / 评测规则外信息源 / 绕计费。
+
+~~参照轨迹~~:已删。缺口思考由优化器自己的反事实推理承担(忠告 2),无需外部轨迹提词。
+
+## 五、Watchdog(元级看门狗,瘦身版)
+
+`workflows/_meta/watchdog.js` —— 手写、冻结、单节点,RSI 塔顶,无人再看它。
+
+- **触发 = 机械谓词**(harness 从 meta-journal 计算,LLM 不参与触发):
+  连续 N 轮无候选 / 优化轮 budget_exceeded / ledger·笔记零写入 / probe 从未发起 /
+  frontier 在噪声带外无移动连续 ≥5 轮(停滞)。
+- **触发后**:watchdog 读 optimizer 全历史(meta-journal + NOTES.md + optimizer.js 源码,
+  量小,单节点装得下),判断三选一:
+  a. **健康停滞**(疑似天花板/噪声,过程无病理)→ 不动,升级人工;
+  b. **过程病理**(对照忠告 6 的判例清单,须引用具体证据)→ 改写 optimizer.js;
+  c. **运行故障**(爆上下文/不出结果/取证死循环)→ 修复。
+- **护栏**:改写走同一事务写入门;git 版本化 + 回滚 last-known-good;
+  病理判定必须引证(ledger 行、编辑分布统计),"感觉换个思路更好"不构成理由;
+  两臂实验中 watchdog 对称配置,介入 = 版本事件,逐 iteration 报告版本号。
+- **L2 以上锁死**:不做"让优化器更强"的二阶优化(信号衰减),watchdog 只管"活着且不堕落"。
+
+## 六、基线诚实性纪律(全域 gate)
+
+每个域的 parity 种子定稿前必须过**失败构成拆解**:maxTurns/预算/超时死亡占比、判分假阴性抽查。
+基线配置压模型 = 虚报优化增益。(realmath 教训:maxTurns 20→64 + judge 兜底,0.197→0.500。)
+
+---
+
+## 七、当前状态(2026-07-22)
 
 | 里程碑 | 状态 |
 |---|---|
 | M0 骨架 + DSL v1 冻结 | ✅ |
 | M1 executor(12 单测 + 真实冒烟) | ✅ |
-| M2 realmath 端到端 | ✅ **诚实基线 train-66 = 0.500**(130k tok/题),judge 兜底已抽查 |
+| M2 realmath 端到端 | ✅ 诚实基线 train-66 = **0.500**(130k tok/题) |
 | M4 bcplus | ✅ 代码;⚠ smoke 0/3 成色未查 |
 | M5 finsearch | ✅ 代码;smoke 1/3,未过基线审查 |
-| M3 TB2 harbor 桥接 | ⏳ 未动 |
-| M6 富种子 + 模式库 | ⏳ 未动 |
+| M3 TB2 harbor 桥接 | ⏳ |
+| M6 富种子 + 模式库 | ⏳ |
 
----
+## 八、执行顺序
 
-## 三、执行顺序
+### Phase A — 基建收尾
+A1 bcplus 0/3 排查 → A2 M3 TB2 桥接 + parity 校验(0.45±0.04)→ A3 DSL v1.1(defineTool/runTool + 单测)
+→ A4 各域诚实基线(过 §六 gate,k≥3 估噪声带)→ A5 M6 富种子(realmath 强弱路由 decompose-route
+手工对比;TB2 冠军译文;docs/PATTERNS.md)
 
-### Phase A — 基建收尾(先便宜后贵)
-- **A1** bcplus 0/3 排查(拉 journal 人工看:检索质量/judge/格式,分清真难 vs bug)
-- **A2** M3: TB2 harbor 桥接 agent(`--agent-import-path` 薄 Python 壳 → node executor;验证 node-in-container vs host-exec 转发两种拓扑)+ **parity 校验**(与现 harness seed 0.45±0.04 打平)
-- **A3** DSL v1.1: `defineTool` / `runTool` + 单测(优化 run 前的硬前置)
-- **A4** finsearch / bcplus / tb2 诚实基线(每域过 D7 审查;k≥3 估噪声带)
-- **A5** M6: realmath 强弱路由富种子(decompose→route→assemble)手工跑 train-66 对比 parity;TB2 冠军译文;docs/PATTERNS.md
+### Phase B — 优化器 v1
+B1 特权工具(§三清单;矩阵/分桶聚合器)→ B2 optimizer.js v1(单强节点起步)+ skill(§四忠告全文)
+→ B3 realmath 首轮优化实验(优化器冻结,k=3,与 0.500/130k 配对比较)
 
-### Phase B — 优化器 v1(冻结版)
-- **B1** proposer 特权工具(D2 清单;矩阵/分桶聚合器 = WorldCalib span-builder 纪律的移植)
-- **B2** `optimizer.js` v1: evidence → diagnose(双产物)→ patch(五元)→ predict → probe → ledger;gap 池文件格式
-- **B3** realmath 首轮优化实验(优化器冻结,k=3,与 0.500/130k 基线配对比较)
-
-### Phase C — RSI 层
-- **C1** 健康谓词(机械)+ meta-journal 聚合
-- **C2** `watchdog.js` + 罐头轮 CI + 回滚机制
-- **C3** 过程审计清单 prompt(六病理 + WorldCalib 判例作 few-shot)
+### Phase C — Watchdog
+C1 机械健康谓词 + meta-journal 聚合 → C2 watchdog.js + 事务写入 CI + 回滚演练
+(注入坏 optimizer.js → 修复 → 回滚,全路径过一遍)
 
 ### Phase D — 实验矩阵(远期)
-四域两臂、Pareto 前沿报告、参照轨迹试点、全开源 proposer 消融、L1 watchdog 介入案例分析。
+四域两臂、(score, tokens) Pareto 报告、全开源 proposer 消融、watchdog 介入案例分析。
 
----
+## 九、验收
 
-## 四、每阶段验收
-
-- A2: TB2 parity 分数 ∈ 0.45±0.04;journal token 与计费对账。
-- A3: defineTool 单测覆盖(LLM-handler / runTool 组合 / journal 记账 / 禁区)。
-- A4: 每域产出失败构成拆解报告 + 噪声带估计。
-- B3: 首轮优化 run 产出 ≥1 个通过配对检验的候选,或诚实的 EXHAUSTED 结论;全程 meta-journal 可审计。
-- C2: 注入故障(改坏 optimizer.js)→ watchdog 修复 → 回滚路径演练通过。
+- A2: TB2 parity ∈ 0.45±0.04;journal token 与计费对账。
+- A3: defineTool 单测(LLM-handler / runTool 组合 / 记账 / 禁区)。
+- A4: 每域失败构成拆解报告 + 噪声带数字。
+- B3: ≥1 个过配对检验的候选,或诚实 EXHAUSTED;meta-journal 全程可审计;
+  笔记里可见"假设→预测→对账"闭环。
+- C2: 故障注入演练通过。
