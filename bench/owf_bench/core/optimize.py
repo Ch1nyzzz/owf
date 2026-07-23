@@ -79,7 +79,11 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"candidate (iter_*/candidate.js, each with its eval report), or graft pieces across them — "
             f"rejected candidates often contain good ideas that didn't clear the noise bar alone. "
             f"State your chosen parent(s) in your notes.\n"
-            f"Rollout journals for any evaluated run are next to its report (task dirs with journal.jsonl and node transcripts).\n"
+            f"Rollout journals for any evaluated run sit next to its report: one dir per (task, repeat), "
+            f"each with journal.jsonl and per-node transcripts. The baseline run — every rollout behind the "
+            f"stability report — is linked at {opt_root}/evidence/baseline.\n"
+            f"Your read scope is exactly {opt_root} and {ROOT / 'workflows'}; all evidence lives inside it. "
+            f"Paths outside are refused by design (gold answers under data/ are off-limits), so do not spend turns probing them.\n"
             f"Study the evidence, then write an improved candidate via write_workflow, update your notes, and submit your summary."
         ),
         "domain": domain,
@@ -191,6 +195,16 @@ def main() -> None:
         raise SystemExit(f"stability.json missing in {baseline} — run stability.py first (k>=3 gate)")
     shutil.copy(stability_src, opt_root / "evidence/stability.json")
     shutil.copy(ROOT / "docs/DSL.md", opt_root / "evidence/DSL.md")  # the action-space reference
+
+    # The optimizer's read scope is opt_root + workflows/ (executor/src/tools/meta.ts).
+    # The baseline run is a sibling directory outside that scope, so link it in — without
+    # this the optimizer can reach neither the per-task frontier report nor a single
+    # baseline rollout journal, and round 1 has to guess from aggregates alone.
+    # A symlink suffices: meta.ts scopes with path.resolve, which does not follow links.
+    baseline_link = opt_root / "evidence/baseline"
+    if not baseline_link.exists():
+        baseline_link.symlink_to(baseline)
+
     stability = json.loads(stability_src.read_text())
     base_report = json.loads((baseline / "report.json").read_text())
 
@@ -205,7 +219,7 @@ def main() -> None:
                 "workflow": str(Path(args.seed_workflow).resolve()),
                 "score": base_report["score"],
                 "tokens_per_task": base_report["tokens_per_task"],
-                "report": str(baseline / "report.json"),
+                "report": str(baseline_link / "report.json"),  # in-scope path, not the raw sibling dir
             },
             "history": [],
             "watchdog_events": [],
