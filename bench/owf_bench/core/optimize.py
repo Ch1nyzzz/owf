@@ -200,7 +200,15 @@ def main() -> None:
 
     opt_root = Path(args.opt_root).resolve()
     (opt_root / "evidence").mkdir(parents=True, exist_ok=True)
-    optimizer_path = ROOT / "workflows/_meta/optimizer.js"
+
+    # Each run owns a private copy of the optimizer. The watchdog rewrites this file in
+    # place, so concurrent runs sharing workflows/_meta/optimizer.js would silently swap
+    # each other's optimizer mid-experiment — §五 wants a watchdog intervention to be a
+    # versioned event within ONE arm, not a global one. The copy also keeps the source
+    # inside the optimizer's own read scope, so it can inspect itself.
+    optimizer_path = opt_root / "optimizer.js"
+    if not optimizer_path.exists():
+        shutil.copy(ROOT / "workflows/_meta/optimizer.js", optimizer_path)
 
     baseline = Path(args.baseline_run).resolve()
     stability_src = baseline / "stability.json"
