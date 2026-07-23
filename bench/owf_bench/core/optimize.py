@@ -132,7 +132,9 @@ def run_watchdog(opt_root: Path, domain: str, it: int, predicates: list[str], op
     }
     task_file = wd_dir / "task.json"
     task_file.write_text(json.dumps(task))
-    summary = sh_executor(ROOT / "workflows/_meta/watchdog.js", task_file, wd_dir, "_meta", 1_500_000, 3600)
+    # Budget covers the watchdog's reader subagents: diagnosing a stagnation predicate means
+    # sweeping several rounds of optimizer history, and one optimizer round alone is ~400KB.
+    summary = sh_executor(ROOT / "workflows/_meta/watchdog.js", task_file, wd_dir, "_meta", 4_000_000, 5400)
     verdict = summary.get("result") if isinstance(summary.get("result"), dict) else {}
     event = {"iter": it, "predicates": predicates, "verdict": verdict.get("verdict"), "evidence": str(verdict.get("evidence"))[:2000]}
 
