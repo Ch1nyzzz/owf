@@ -10,13 +10,18 @@
 #   Optimizer/watchdog: gpt-5.6-terra via the Codex coding-plan subscription (OAuth, xhigh)
 models:
   deepseek-v4-pro:
-    base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
-    model_id: Vendor3/DeepSeek-V4-Pro
-    api_key_env: SOLVER_API_KEY
+    # TEMP: via Together until the gpugeek key is authorized for V4-Pro
+    # ("model not bound to requested spec"). To switch back:
+    #   base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
+    #   model_id: Vendor3/DeepSeek-V4-Pro
+    #   api_key_env: SOLVER_API_KEY
+    base_url: https://api.together.xyz/v1
+    model_id: deepseek-ai/DeepSeek-V4-Pro
+    api_key_env: TOGETHER_API_KEY
     context_window: 131072
     max_tokens: 32768
     reasoning: true
-    cost: { input: 0.55, output: 2.20 }   # approximate, reconcile with gpugeek console
+    cost: { input: 1.20, output: 4.00 }   # approximate, reconcile with Together billing
 
   gpt-5.6-terra:
     catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
