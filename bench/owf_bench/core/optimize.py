@@ -8,8 +8,9 @@ file-based versioning and last-known-good rollback.
 Per round:
   1. prepare iter dir + evidence (frontier report, stability, notes persist at opt root)
   2. run optimizer.js (executor, domain=_meta, privileged tools)
-  3. if a candidate landed: evaluate on train (k repeats), paired-compare vs frontier
-     with the noise band; accept -> candidate becomes frontier
+  3. if a candidate landed: evaluate on train (k repeats), then place it on the
+     (score up, cost down) Pareto frontier — it enters unless an existing point
+     dominates it, and evicts the points it dominates
   4. compute health predicates; if fired -> run watchdog; apply verdict
 """
 
@@ -28,6 +29,36 @@ EXECUTOR = ROOT / "executor"
 STAGNATION_ROUNDS = 5
 NO_CANDIDATE_STREAK = 3
 WATCHDOG_COOLDOWN = 5  # rounds between watchdog invocations
+
+
+def dominates(a: dict, b: dict, band: float) -> bool:
+    """Does `a` dominate `b` on (score up, cost down)?
+
+    Score differences inside the noise band are ties, not wins: without that, run-to-run
+    jitter alone would keep evicting frontier points and the set would churn on noise.
+    Cost has no band — it is near-deterministic for a given topology, and the whole point
+    of the second axis is to prefer the cheaper of two candidates that score the same.
+    """
+    score_better = a["score"] - b["score"] > band
+    score_worse = b["score"] - a["score"] > band
+    cost_better = a["cost"] < b["cost"]
+    cost_worse = a["cost"] > b["cost"]
+    if score_worse or cost_worse:
+        return False
+    return score_better or cost_better
+
+
+def update_frontier(frontier: list[dict], candidate: dict, band: float) -> tuple[list[dict], bool]:
+    """Insert `candidate` into the non-dominated set. Returns (new frontier, entered?)."""
+    if any(dominates(point, candidate, band) for point in frontier):
+        return frontier, False
+    kept = [point for point in frontier if not dominates(candidate, point, band)]
+    return sorted([*kept, candidate], key=lambda p: (-p["score"], p["cost"])), True
+
+
+def best_by_score(frontier: list[dict]) -> dict:
+    """Highest score, cheapest among ties — the point reported as the run's champion."""
+    return min(frontier, key=lambda p: (-p["score"], p["cost"]))
 
 
 def sh_executor(workflow: Path, task_file: Path, out_dir: Path, domain: str, max_tokens: int, max_sec: int) -> dict:
@@ -67,9 +98,23 @@ def evaluate(workflow: Path, domain: str, out_dir: Path, limit: int | None, repe
     return json.loads(report_path.read_text())
 
 
+def frontier_table(frontier: list[dict], band: float) -> str:
+    """The Pareto set as the optimizer sees it — one line per non-dominated point."""
+    lines = []
+    for i, p in enumerate(frontier, 1):
+        tok = p.get("tokens_per_task") or {}
+        lines.append(
+            f"  [{i}] score {p['score']:.4f} | cost {p['cost']:.4f} CNY/task "
+            f"({tok.get('input', '?')} in + {tok.get('output', '?')} out) | {p['workflow']}\n"
+            f"      per-task scores: {p.get('report')}"
+        )
+    return "\n".join(lines)
+
+
 def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str,
                      eval_max_tokens: int, eval_max_sec: int) -> dict:
     frontier = state["frontier"]
+    band = state.get("noise_band", 0.04)
     stability = opt_root / "evidence/stability.json"
     return {
         "id": f"opt-{domain}-iter{it:03d}",
@@ -77,13 +122,15 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"Optimization round {it} for domain '{domain}'.\n"
             f"Optimization root: {opt_root} (your notes: {opt_root}/NOTES.md; stability report: {stability}; "
             f"round history: {opt_root}/state.json; per-round artifacts under {opt_root}/iter_*/).\n"
-            f"Current frontier workflow: {frontier['workflow']} — train score {frontier['score']} "
-            f"(noise band ±{state.get('noise_band', 0.04)}), tokens/task {frontier.get('tokens_per_task')}.\n"
-            f"Frontier eval report (per-task scores): {frontier.get('report')}\n"
-            f"Parent choice is YOURS: you may base the new candidate on the frontier, on any earlier "
-            f"candidate (iter_*/candidate.js, each with its eval report), or graft pieces across them — "
-            f"rejected candidates often contain good ideas that didn't clear the noise bar alone. "
-            f"State your chosen parent(s) in your notes.\n"
+            f"\nCURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, cost down), "
+            f"score noise band ±{band}:\n{frontier_table(frontier, band)}\n"
+            f"A candidate enters the frontier by not being dominated: it must beat some point on score "
+            f"(by more than the noise band) or be cheaper, without being worse on the other axis. "
+            f"Cost is CNY per task at {'/'.join(str(x) for x in ('input 1.00', 'output 2.00'))} per 1M tokens — "
+            f"output tokens cost twice what input does, so a verbose node is expensive even at equal token count.\n"
+            f"Parent choice is YOURS: any frontier point, any earlier candidate (iter_*/candidate.js, each with "
+            f"its eval report), or a graft across them — rejected candidates often contain good ideas that did "
+            f"not clear the bar alone. State your chosen parent(s) in your notes.\n"
             f"Rollout journals for any evaluated run sit next to its report: one dir per (task, repeat), "
             f"each with journal.jsonl and per-node transcripts. The baseline run — every rollout behind the "
             f"stability report — is linked at {opt_root}/evidence/baseline.\n"
@@ -112,10 +159,11 @@ def compute_predicates(state: dict) -> list[str]:
         fired.append(f"no_candidate_{NO_CANDIDATE_STREAK}_rounds")
     if hist and hist[-1].get("optimizer_status") in ("budget_exceeded", "timeout", "infra_error"):
         fired.append(f"optimizer_{hist[-1]['optimizer_status']}")
-    band = state.get("noise_band", 0.04)
-    scores = [h["frontier_score_after"] for h in hist]
-    if len(scores) >= STAGNATION_ROUNDS and max(scores[-STAGNATION_ROUNDS:]) - scores[-STAGNATION_ROUNDS] <= band:
-        fired.append(f"stagnation_{STAGNATION_ROUNDS}_rounds_within_noise_band")
+    # Stagnation is now "the frontier stopped moving", not "the top score stopped rising":
+    # a round that only made things cheaper is real progress on the second axis.
+    recent_rounds = hist[-STAGNATION_ROUNDS:]
+    if len(recent_rounds) == STAGNATION_ROUNDS and not any(h.get("entered_frontier") for h in recent_rounds):
+        fired.append(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_entry")
     return fired
 
 
@@ -228,6 +276,12 @@ def main() -> None:
 
     stability = json.loads(stability_src.read_text())
     base_report = json.loads((baseline / "report.json").read_text())
+    if "cost_per_task" not in base_report:
+        raise SystemExit(
+            f"{baseline}/report.json predates cost accounting. Its input tokens were also recorded "
+            "under the old cache-dependent accounting, so it cannot seed a cost axis — re-run the "
+            "baseline with the current runner.py before starting a Pareto run."
+        )
 
     state_path = opt_root / "state.json"
     if state_path.exists():
@@ -236,22 +290,32 @@ def main() -> None:
         state = {
             "domain": args.domain,
             "noise_band": max(stability["noise_band"], 0.02),
-            "frontier": {
-                "workflow": str(Path(args.seed_workflow).resolve()),
-                "score": base_report["score"],
-                "tokens_per_task": base_report["tokens_per_task"],
-                "report": str(baseline_link / "report.json"),  # in-scope path, not the raw sibling dir
-            },
+            # Pareto set on (score up, cost down); the baseline is its first point.
+            "frontier": [
+                {
+                    "workflow": str(Path(args.seed_workflow).resolve()),
+                    "score": base_report["score"],
+                    "cost": base_report["cost_per_task"],
+                    "tokens_per_task": base_report["tokens_per_task"],
+                    "report": str(baseline_link / "report.json"),  # in-scope path, not the raw sibling dir
+                }
+            ],
             "history": [],
             "watchdog_events": [],
             "last_watchdog_iter": -10,
         }
+    if isinstance(state.get("frontier"), dict):
+        raise SystemExit(
+            f"{state_path} holds a single-point frontier from the pre-Pareto driver. Its candidates have "
+            "no cost measurement, so they cannot be placed on the second axis — start a fresh --opt-root."
+        )
     if not (opt_root / "NOTES.md").exists():
         (opt_root / "NOTES.md").write_text("(empty — first round)\n")
 
     start_iter = (state["history"][-1]["iter"] + 1) if state["history"] else 1
     for it in range(start_iter, start_iter + args.iters):
-        print(f"=== iter {it} (frontier {state['frontier']['score']}) ===")
+        top = best_by_score(state["frontier"])
+        print(f"=== iter {it} (frontier: {len(state['frontier'])} pts, best {top['score']:.3f} @ {top['cost']:.4f} CNY) ===")
         iter_dir = opt_root / f"iter_{it:03d}"
         (iter_dir / "opt").mkdir(parents=True, exist_ok=True)
 
@@ -276,27 +340,28 @@ def main() -> None:
             # two-stage eval: k=1 screen (cheap), k=eval_repeats confirm only if promising.
             # Screening can miss a good candidate that gets unlucky at k=1 — accepted tradeoff;
             # the same run dir is reused so the confirm resumes r0 instead of re-running it.
-            # No mid-loop certification gate: every candidate's measured score is just data
-            # (the optimizer self-selects parents from full history; the noise band is served
-            # to it as data, not enforced as a bar). "frontier" is pure bookkeeping: the
-            # highest measured score so far, used as the default reference in the next
-            # round's instruction. Luck inflation is settled at the END: the champion must
+            # No mid-loop certification gate: every candidate's measured score is just data,
+            # and the optimizer still self-selects parents from the full history. The frontier
+            # is bookkeeping — the non-dominated set so far, served to the next round as the
+            # default set of parents. Luck inflation is settled at the END: the champion must
             # pass k=3 confirmation + the held-out test set.
             report = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, args.eval_repeats,
                               args.eval_workers, args.eval_max_tokens, args.eval_max_sec)
             if report:
-                delta = report["score"] - state["frontier"]["score"]
-                became_frontier = delta > 0
-                rec.update({"candidate_score": report["score"], "delta": round(delta, 4),
-                            "became_frontier": became_frontier,
+                point = {"workflow": str(candidate), "score": report["score"], "cost": report["cost_per_task"],
+                         "tokens_per_task": report["tokens_per_task"], "report": str(iter_dir / "eval/report.json")}
+                before = best_by_score(state["frontier"])
+                state["frontier"], entered = update_frontier(state["frontier"], point, state["noise_band"])
+                rec.update({"candidate_score": report["score"], "candidate_cost": report["cost_per_task"],
+                            "delta": round(report["score"] - before["score"], 4),
+                            "entered_frontier": entered,
                             "candidate_tokens_per_task": report["tokens_per_task"]})
-                if became_frontier:
-                    state["frontier"] = {"workflow": str(candidate), "score": report["score"],
-                                         "tokens_per_task": report["tokens_per_task"], "report": str(iter_dir / "eval/report.json")}
-                print(f"  candidate {report['score']:.3f} (delta {delta:+.3f}){' -> new frontier' if became_frontier else ''}")
+                verdict = f"-> frontier ({len(state['frontier'])} pts)" if entered else "dominated"
+                print(f"  candidate {report['score']:.3f} @ {report['cost_per_task']:.4f} CNY {verdict}")
             else:
-                rec.update({"candidate_score": None, "became_frontier": False, "eval_failed": True})
-        rec["frontier_score_after"] = state["frontier"]["score"]
+                rec.update({"candidate_score": None, "entered_frontier": False, "eval_failed": True})
+        best = best_by_score(state["frontier"])
+        rec["frontier_after"] = {"points": len(state["frontier"]), "best_score": best["score"], "best_cost": best["cost"]}
         state["history"].append(rec)
         state_path.write_text(json.dumps(state, indent=1))
 
@@ -307,8 +372,10 @@ def main() -> None:
             run_watchdog(opt_root, args.domain, it, predicates, args.opt_model, optimizer_path, state)
             state_path.write_text(json.dumps(state, indent=1))
 
-    print(json.dumps({"frontier": state["frontier"], "rounds": len(state["history"]),
-                      "watchdog_events": state["watchdog_events"]}, indent=1))
+    # The champion still owes a k=3 confirmation and the held-out test set; the frontier
+    # is measured at k=1 and picking its best point is exactly where luck accumulates.
+    print(json.dumps({"frontier": state["frontier"], "champion_by_score": best_by_score(state["frontier"]),
+                      "rounds": len(state["history"]), "watchdog_events": state["watchdog_events"]}, indent=1))
 
 
 if __name__ == "__main__":
