@@ -126,8 +126,10 @@ export function makeMetaTools(task: TaskPayload): ToolRegistry {
 						"--repeats", String(repeats),
 						"--workers", String(Math.min(limit * repeats, 16)),
 						"--out", probeDir,
-						"--max-tokens", "300000",
-						"--max-wallclock-sec", "1500",
+						// Must match the cap the baseline (and the driver's eval) runs under, or the
+						// optimizer probes its candidate under a stricter budget than it is scored on.
+						"--max-tokens", String(Number(task.eval_max_tokens) || 300000),
+						"--max-wallclock-sec", String(Number(task.eval_max_sec) || 1500),
 					],
 					{ cwd: benchRoot ? resolve(benchRoot, "..") : undefined, env: { ...process.env, PYTHONPATH: benchRoot }, timeout: 3_000_000, maxBuffer: 16 * 1024 * 1024 },
 					(err, stdout, stderr) => {

@@ -47,10 +47,14 @@ def validate_workflow(path: Path) -> tuple[bool, str]:
     return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
 
-def evaluate(workflow: Path, domain: str, out_dir: Path, limit: int | None, repeats: int, workers: int) -> dict | None:
+def evaluate(workflow: Path, domain: str, out_dir: Path, limit: int | None, repeats: int, workers: int,
+             max_tokens: int, max_sec: int) -> dict | None:
+    # The per-rollout budget MUST match the one the baseline was measured under, or the
+    # candidate is compared against a frontier it was never allowed to reach (realmath's
+    # baseline ran at 300k, bcplus's at 600k — a shared hardcoded cap silently penalises one).
     cmd = ["python3", str(ROOT / "bench/owf_bench/core/runner.py"), "--domain", domain, "--workflow", str(workflow),
            "--subset", "train", "--repeats", str(repeats), "--workers", str(workers), "--out", str(out_dir),
-           "--max-tokens", "300000", "--max-wallclock-sec", "1800"]
+           "--max-tokens", str(max_tokens), "--max-wallclock-sec", str(max_sec)]
     if limit:
         cmd += ["--limit", str(limit)]
     env = {"PYTHONPATH": str(ROOT / "bench")}
@@ -63,7 +67,8 @@ def evaluate(workflow: Path, domain: str, out_dir: Path, limit: int | None, repe
     return json.loads(report_path.read_text())
 
 
-def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str) -> dict:
+def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str,
+                     eval_max_tokens: int, eval_max_sec: int) -> dict:
     frontier = state["frontier"]
     stability = opt_root / "evidence/stability.json"
     return {
@@ -93,6 +98,9 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
         "bench_root": str(ROOT / "bench"),
         "opt_model": opt_model,
         "opt_thinking": opt_thinking,
+        # run_probe must evaluate under the same per-rollout budget as the real eval.
+        "eval_max_tokens": eval_max_tokens,
+        "eval_max_sec": eval_max_sec,
     }
 
 
@@ -181,6 +189,9 @@ def main() -> None:
     # acceptance threshold carries the statistical load.
     p.add_argument("--eval-repeats", type=int, default=1)
     p.add_argument("--eval-workers", type=int, default=32)
+    # Must equal the baseline run's cap; see evaluate(). realmath: 300000, bcplus: 600000.
+    p.add_argument("--eval-max-tokens", type=int, default=300_000)
+    p.add_argument("--eval-max-sec", type=int, default=1800)
     p.add_argument("--opt-model", default="gpt-5.6-terra")
     p.add_argument("--opt-thinking", default="xhigh")
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
@@ -236,7 +247,8 @@ def main() -> None:
         iter_dir = opt_root / f"iter_{it:03d}"
         (iter_dir / "opt").mkdir(parents=True, exist_ok=True)
 
-        task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking)
+        task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking,
+                                args.eval_max_tokens, args.eval_max_sec)
         task_file = iter_dir / "opt_task.json"
         task_file.write_text(json.dumps(task))
         t0 = time.time()
@@ -262,7 +274,8 @@ def main() -> None:
             # highest measured score so far, used as the default reference in the next
             # round's instruction. Luck inflation is settled at the END: the champion must
             # pass k=3 confirmation + the held-out test set.
-            report = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, args.eval_repeats, args.eval_workers)
+            report = evaluate(candidate, args.domain, iter_dir / "eval", args.eval_limit, args.eval_repeats,
+                              args.eval_workers, args.eval_max_tokens, args.eval_max_sec)
             if report:
                 delta = report["score"] - state["frontier"]["score"]
                 became_frontier = delta > 0
