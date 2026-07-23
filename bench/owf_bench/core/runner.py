@@ -55,7 +55,13 @@ def sut_rates() -> tuple[float, float]:
     return float(cost.get("input", 0.0)), float(cost.get("output", 0.0))
 
 
-def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
+def load_tasks(domain: str, subset: str, limit: int | None, task_ids: list[str] | None = None) -> list[dict]:
+    """Tasks for one eval. `task_ids` selects specific tasks; `limit` takes a prefix.
+
+    Without task_ids a probe can only ever see the same first N ids, which is how the
+    optimizer ended up shipping candidates whose target task it had no way to test.
+    Selection still happens strictly inside `subset`, so the test split stays sealed.
+    """
     data_dir = ROOT / "data" / domain
     tasks = [json.loads(l) for l in (data_dir / "tasks.jsonl").read_text().splitlines() if l.strip()]
     split = json.loads((data_dir / "split.json").read_text())
@@ -65,6 +71,12 @@ def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
     elif subset != "all":
         raise SystemExit(f"unknown subset: {subset}")
     tasks.sort(key=lambda t: t["id"])
+    if task_ids:
+        by_id = {t["id"]: t for t in tasks}
+        missing = [tid for tid in task_ids if tid not in by_id]
+        if missing:
+            raise SystemExit(f"task ids not in {domain}/{subset}: {missing}")
+        return [by_id[tid] for tid in task_ids]
     return tasks[:limit] if limit else tasks
 
 
@@ -128,6 +140,7 @@ def main() -> None:
     p.add_argument("--workflow", required=True)
     p.add_argument("--subset", default="train", help="train|test|all")
     p.add_argument("--limit", type=int)
+    p.add_argument("--task-ids", help="comma-separated task ids (within --subset); overrides --limit")
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--out", required=True)
@@ -135,7 +148,8 @@ def main() -> None:
     p.add_argument("--max-wallclock-sec", type=int, default=900)
     args = p.parse_args()
 
-    tasks = load_tasks(args.domain, args.subset, args.limit)
+    ids = [t.strip() for t in args.task_ids.split(",") if t.strip()] if args.task_ids else None
+    tasks = load_tasks(args.domain, args.subset, args.limit, ids)
     workflow = Path(args.workflow).resolve()
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

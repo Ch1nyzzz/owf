@@ -102,16 +102,22 @@ export function makeMetaTools(task: TaskPayload): ToolRegistry {
 		name: "run_probe",
 		label: "Run probe evaluation",
 		description:
-			"Evaluate the current candidate workflow on a small task sample. Caps: limit<=12, repeats<=2. Returns the score report. Slow (minutes) — use deliberately.",
+			"Evaluate the current candidate workflow on a small task sample. Pass task_ids to test the SPECIFIC tasks your change targets — otherwise you only ever see the same first `limit` tasks, and a fix aimed elsewhere goes untested. Caps: 12 tasks, repeats<=2. Returns the score report. Slow (minutes) — use deliberately.",
 		parameters: Type.Object({
-			limit: Type.Number({ description: "number of tasks (<=12)" }),
+			limit: Type.Number({ description: "number of tasks from the start of the train split (<=12); ignored when task_ids is given" }),
 			repeats: Type.Number({ description: "repeats per task (<=2)" }),
 			subset: Type.String({ description: "'train' only", default: "train" }),
+			task_ids: Type.Optional(
+				Type.Array(Type.String(), { description: "specific train task ids to evaluate (<=12); takes precedence over limit" }),
+			),
 		}),
 		executionMode: "sequential",
 		execute: async (_id, params, signal) => {
 			const limit = Math.min(Math.max(1, Number((params as any).limit) || 5), 12);
 			const repeats = Math.min(Math.max(1, Number((params as any).repeats) || 1), 2);
+			const rawIds = (params as any).task_ids;
+			const taskIds: string[] = Array.isArray(rawIds) ? rawIds.map(String).filter(Boolean).slice(0, 12) : [];
+			const nTasks = taskIds.length || limit;
 			if (!existsSync(candidatePath)) return text("no candidate written yet — call write_workflow first");
 			const probeDir = resolve(optRoot, `probe_${Date.now()}`);
 			return new Promise((resolvePromise) => {
@@ -122,10 +128,10 @@ export function makeMetaTools(task: TaskPayload): ToolRegistry {
 						"--domain", String(task.domain),
 						"--workflow", candidatePath,
 						"--subset", "train",
-						"--limit", String(limit),
+						...(taskIds.length ? ["--task-ids", taskIds.join(",")] : ["--limit", String(limit)]),
 						"--repeats", String(repeats),
-						// Fully parallel: limit<=12 and repeats<=2 bound this at 24 jobs anyway.
-						"--workers", String(Math.min(limit * repeats, 64)),
+						// Fully parallel: <=12 tasks and repeats<=2 bound this at 24 jobs anyway.
+						"--workers", String(Math.min(nTasks * repeats, 64)),
 						"--out", probeDir,
 						// Must match the cap the baseline (and the driver's eval) runs under, or the
 						// optimizer probes its candidate under a stricter budget than it is scored on.
