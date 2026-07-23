@@ -35,6 +35,26 @@ def load_dotenv() -> None:
             os.environ[m.group(1)] = m.group(2)
 
 
+def sut_rates() -> tuple[float, float]:
+    """(input, output) CNY per 1M tokens for the single SUT model.
+
+    Cost is the Pareto second axis, and it is only a fixed linear transform of tokens
+    while exactly one SUT model exists. A second `sut: true` entry would silently make
+    this average two different price tiers, so refuse rather than mis-price.
+    """
+    import yaml
+
+    models = yaml.safe_load((ROOT / "configs/models.yaml").read_text())["models"]
+    sut = {k: v for k, v in models.items() if v.get("sut")}
+    if len(sut) != 1:
+        raise SystemExit(
+            f"expected exactly one model with sut: true, found {sorted(sut)}. "
+            "Multiple SUT tiers need per-model cost accounting (see configs/models.yaml)."
+        )
+    cost = next(iter(sut.values())).get("cost", {})
+    return float(cost.get("input", 0.0)), float(cost.get("output", 0.0))
+
+
 def load_tasks(domain: str, subset: str, limit: int | None) -> list[dict]:
     data_dir = ROOT / "data" / domain
     tasks = [json.loads(l) for l in (data_dir / "tasks.jsonl").read_text().splitlines() if l.strip()]
@@ -143,6 +163,11 @@ def main() -> None:
     task_scores = {tid: sum(x["score"] for x in rs) / len(rs) for tid, rs in by_task.items()}
     total_in = sum(r["tokens"]["input"] for r in results)
     total_out = sum(r["tokens"]["output"] for r in results)
+    # Pareto's second axis. Input tokens already include cache hits (see promptTokens in
+    # budget.ts), so this never depends on a provider's cache reporting. Output is priced
+    # separately because it costs 2x input — summing raw tokens would halve its true weight.
+    rate_in, rate_out = sut_rates()
+    cost_total = (total_in * rate_in + total_out * rate_out) / 1_000_000
     report = {
         "workflow": str(workflow),
         "domain": args.domain,
@@ -152,11 +177,13 @@ def main() -> None:
         "score": sum(task_scores.values()) / len(task_scores) if task_scores else 0.0,
         "tokens_total": {"input": total_in, "output": total_out},
         "tokens_per_task": {"input": total_in // max(1, len(results)), "output": total_out // max(1, len(results))},
+        "cost_total": round(cost_total, 4),
+        "cost_per_task": round(cost_total / max(1, len(results)), 6),
         "statuses": {s: sum(1 for r in results if r["status"] == s) for s in {r["status"] for r in results}},
         "task_scores": task_scores,
     }
     (out_dir / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False))
-    print(json.dumps({k: report[k] for k in ("score", "n_tasks", "tokens_per_task", "statuses")}, indent=1))
+    print(json.dumps({k: report[k] for k in ("score", "n_tasks", "tokens_per_task", "cost_per_task", "statuses")}, indent=1))
 
 
 if __name__ == "__main__":

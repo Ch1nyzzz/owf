@@ -70,6 +70,17 @@ async function main(): Promise<number> {
 		return 2;
 	}
 
+	// A candidate workflow may only select SUT models. The optimizer/watchdog tier bills
+	// against a Codex subscription in USD and is not part of what we are optimizing, so a
+	// candidate reaching it would make the cost axis meaningless. `_meta` (optimizer.js,
+	// watchdog.js) is the only domain that sees the full registry. Filtering the registry
+	// itself closes both paths at once: models_available below and models.get() in agent-node.
+	const visibleModels = values.domain === "_meta" ? models : new Map([...models].filter(([, entry]) => entry.sut));
+	if (visibleModels.size === 0) {
+		console.error(`infra error: no models visible to domain ${values.domain} (none marked sut: true)`);
+		return 2;
+	}
+
 	const budget = new Budget(Number(values["max-tokens"]), Number(values["max-wallclock-sec"]) * 1000);
 	const controller = new AbortController();
 	const killTimer = setTimeout(() => controller.abort(), budget.remainingMs());
@@ -101,10 +112,10 @@ async function main(): Promise<number> {
 		task_id: task.id,
 		workflow_name: wf.meta.name,
 		domain: values.domain,
-		models_available: [...models.keys()],
+		models_available: [...visibleModels.keys()],
 	});
 
-	const ctx = buildCtx({ task, models, tools, journal, budget, streamFn: streamSimple as StreamFn, signal: controller.signal });
+	const ctx = buildCtx({ task, models: visibleModels, tools, journal, budget, streamFn: streamSimple as StreamFn, signal: controller.signal });
 
 	try {
 		const result = await wf.run(ctx);

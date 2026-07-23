@@ -54,7 +54,7 @@ function mockStream(script: Array<AssistantMessage | ((c: Context) => AssistantM
 function mkDeps(streamFn: StreamFn, opts?: { tools?: ToolRegistry; maxTokens?: number }): { deps: CtxDeps; outDir: string } {
 	const outDir = mkdtempSync(join(tmpdir(), "owf-test-"));
 	const models = new Map<string, ModelEntry>([
-		["mock", { key: "mock", model: { id: "mock-model", name: "mock", api: "openai-completions", provider: "mock", baseUrl: "http://mock", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 } as ModelEntry["model"], apiKey: "k" }],
+		["mock", { key: "mock", model: { id: "mock-model", name: "mock", api: "openai-completions", provider: "mock", baseUrl: "http://mock", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 } as ModelEntry["model"], apiKey: "k", sut: true }],
 	]);
 	const deps: CtxDeps = {
 		task: { id: "t1", instruction: "do it" },

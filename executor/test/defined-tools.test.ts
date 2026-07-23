@@ -43,7 +43,7 @@ function mkDeps(streamFn: StreamFn): { deps: CtxDeps; outDir: string } {
 	};
 	const deps: CtxDeps = {
 		task: { id: "t", instruction: "x" },
-		models: new Map<string, ModelEntry>([["mock", { key: "mock", model: { id: "m", name: "mock", api: "openai-completions", provider: "mock", baseUrl: "http://x", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 } as ModelEntry["model"], apiKey: "k" }]]),
+		models: new Map<string, ModelEntry>([["mock", { key: "mock", model: { id: "m", name: "mock", api: "openai-completions", provider: "mock", baseUrl: "http://x", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 } as ModelEntry["model"], apiKey: "k", sut: true }]]),
 		tools: registry, journal: new Journal(outDir), budget: new Budget(1_000_000, 60_000), streamFn,
 		signal: new AbortController().signal,
 	};

@@ -1,20 +1,44 @@
-# SUT model registry. Keys are the names workflow.js uses in agent({model}).
+# Model registry. Keys are the names workflow.js uses in agent({model}).
 # All endpoints are OpenAI-compatible (pi-ai api: openai-completions).
 # api_key_env names the environment variable holding the key — keys never live here.
-# cost: CNY per 1M tokens, used for journal cost accounting only. `input` is the
-#   cache-MISS price; `cache_read` is the cache-hit price (~50x cheaper on DeepSeek).
+#
+# `sut: true` means a domain workflow may select the model. Everything else is visible
+# to the `_meta` domain only (optimizer.js / watchdog.js) — enforced in run.ts by
+# filtering the registry, which closes both models_available and models.get() at once.
+#
+# cost: CNY per 1M tokens. `cache_read` is recorded for reference but is NOT used:
+#   we count cache hits at the full `input` rate (see promptTokens in budget.ts), because
+#   gpugeek reports cache hits erratically and a cost axis must not depend on that.
 
-# Roster locked 2026-07-22 (user decision):
-#   SUT tiers: deepseek-v4-flash = cheap execution, deepseek-v4-pro = strong reasoning
-#     flash on gpugeek; pro on DeepSeek's own API (2026-07-23, see below)
+# Roster locked 2026-07-23 (user decision): the SUT is deepseek-v4-flash ALONE.
+# A single SUT model makes tokens a fixed linear transform of cost, so the Pareto
+# second axis can be token-derived and stays comparable across candidates. Adding a
+# second SUT tier would break that and require per-model cost accounting.
 #   Optimizer/watchdog: gpt-5.6-terra via the Codex coding-plan subscription (OAuth, xhigh)
 models:
+  deepseek-v4-flash:
+    # The sole SUT model. Stays on gpugeek: it has never rate-limited us. Its `cached_tokens`
+    # reporting is unreliable (a cold call claimed 6656 hits; the warm repeat reported none),
+    # which is exactly why cache hits are billed at the full input rate rather than trusted.
+    sut: true
+    base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
+    model_id: Vendor3/DeepSeek-V4-Flash
+    api_key_env: SOLVER_API_KEY
+    context_window: 131072
+    max_tokens: 32768
+    reasoning: false
+    cost: { input: 1.00, output: 2.00, cache_read: 0.02 }   # CNY/1M, gpugeek's own rate unconfirmed
+
+  # --- _meta only, never selectable from a candidate workflow ---
+
+  gpt-5.6-terra:
+    catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
+    auth: codex                            # ~/.codex/auth.json OAuth token, re-read per call
+
   deepseek-v4-pro:
-    # 2026-07-23: moved to the official DeepSeek API. Together rate-limited hard under our
-    # eval concurrency ("Too many tokens in a short window") — it killed 11/12 nodes in one
-    # realmath probe and 2/3 of the bcplus candidate's reviewer nodes, which was starting to
-    # make the optimizers write off the whole pro tier as unusable. gpugeek still answers
-    # "model not bound to requested spec" for Vendor3/DeepSeek-V4-Pro (key not authorized).
+    # Dropped from the SUT roster 2026-07-23 (single-model decision above). Kept here so a
+    # future two-tier experiment can re-enable it with `sut: true` — but that reintroduces
+    # per-model cost accounting, since pro is 3x flash on input and output alike.
     # Verified on the official API: 16 concurrent calls, zero 429, ~1.3s each.
     base_url: https://api.deepseek.com
     model_id: deepseek-v4-pro
@@ -23,22 +47,6 @@ models:
     max_tokens: 32768
     reasoning: true
     cost: { input: 3.00, output: 6.00, cache_read: 0.025 }   # CNY/1M, official DeepSeek pricing
-
-  gpt-5.6-terra:
-    catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
-    auth: codex                            # ~/.codex/auth.json OAuth token, re-read per call
-
-  deepseek-v4-flash:
-    # Stays on gpugeek: it has never rate-limited us, and switching providers mid-experiment
-    # would split a run across two backends. DeepSeek's own price for this model is
-    # 1.00 / 2.00 / 0.02 (in / out / cache-hit, CNY per 1M) if we ever consolidate.
-    base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
-    model_id: Vendor3/DeepSeek-V4-Flash
-    api_key_env: SOLVER_API_KEY
-    context_window: 131072
-    max_tokens: 32768
-    reasoning: false
-    cost: { input: 1.00, output: 2.00, cache_read: 0.02 }   # CNY/1M, gpugeek's own rate unconfirmed
 
 
 

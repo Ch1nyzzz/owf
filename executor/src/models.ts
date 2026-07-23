@@ -33,6 +33,11 @@ interface RawModel {
 	catalog?: string;
 	/** Auth mode: "codex" reads the Codex CLI OAuth token per call. */
 	auth?: string;
+	/**
+	 * Selectable from a domain workflow. Non-SUT models (the optimizer/watchdog tier)
+	 * stay visible to `_meta` only — see the domain filter in run.ts.
+	 */
+	sut?: boolean;
 }
 
 export function loadModels(configPath: string): Map<string, ModelEntry> {
@@ -46,7 +51,7 @@ export function loadModels(configPath: string): Map<string, ModelEntry> {
 			const model = (cat as Record<string, Model<any>>)[id];
 			if (!model) throw new Error(`catalog model not found: ${m.catalog}`);
 			const resolveKey = m.auth === "codex" ? codexAccessToken : () => (m.api_key_env ? process.env[m.api_key_env] : undefined);
-			out.set(key, { key, model, apiKey: resolveKey(), resolveKey });
+			out.set(key, { key, model, apiKey: resolveKey(), resolveKey, sut: m.sut ?? false });
 			continue;
 		}
 		if (!m.base_url || !m.model_id || !m.api_key_env) throw new Error(`model ${key}: base_url, model_id, api_key_env required`);
@@ -67,7 +72,7 @@ export function loadModels(configPath: string): Map<string, ModelEntry> {
 			contextWindow: m.context_window ?? 131072,
 			maxTokens: m.max_tokens ?? 8192,
 		};
-		out.set(key, { key, model, apiKey: process.env[m.api_key_env!] });
+		out.set(key, { key, model, apiKey: process.env[m.api_key_env!], sut: m.sut ?? false });
 	}
 	return out;
 }

@@ -1,6 +1,6 @@
 import { runAgentLoop, type AgentContext, type AgentLoopConfig, type AgentMessage, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { Budget } from "./budget.js";
+import { Budget, promptTokens } from "./budget.js";
 import { Journal, preview } from "./journal.js";
 import { makeSubmitTool, SUBMIT_INSTRUCTION, SUBMIT_TOOL_NAME } from "./structured.js";
 import type { AgentOpts, HookState, ModelEntry, NodeOutcome, ToolRegistry, WorkflowHooks } from "./types.js";
@@ -234,14 +234,15 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 				const m = event.message as AssistantMessage;
 				if ((m as { role?: string }).role === "assistant" && m.errorMessage) lastError = m.errorMessage;
 				if ((m as { role?: string }).role === "assistant" && m.usage) {
-					nodeTokens.input += m.usage.input ?? 0;
+					const inTokens = promptTokens(m.usage);
+					nodeTokens.input += inTokens;
 					nodeTokens.output += m.usage.output ?? 0;
 					deps.budget.addUsage(m.usage);
 					deps.journal.write({
 						type: "turn",
 						node: label,
 						turn: turn + 1,
-						tokens: { input: m.usage.input ?? 0, output: m.usage.output ?? 0 },
+						tokens: { input: inTokens, output: m.usage.output ?? 0 },
 						toolCalls: m.content.filter((c) => c.type === "toolCall").map((c) => ({ tool: (c as { name: string }).name, argsPreview: preview((c as { arguments: unknown }).arguments).slice(0, 200) })),
 					});
 					const text = assistantText(m);

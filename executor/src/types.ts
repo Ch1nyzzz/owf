@@ -8,6 +8,8 @@ export interface ModelEntry {
 	apiKey: string | undefined;
 	/** Dynamic key resolution (e.g. Codex OAuth token re-read per call). */
 	resolveKey?: () => string | undefined;
+	/** Selectable from a domain workflow; non-SUT models are `_meta`-only. */
+	sut: boolean;
 }
 
 /** Read-only rollout view passed to hooks (DSL §3.2). */
