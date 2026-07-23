@@ -124,7 +124,8 @@ export function makeMetaTools(task: TaskPayload): ToolRegistry {
 						"--subset", "train",
 						"--limit", String(limit),
 						"--repeats", String(repeats),
-						"--workers", String(Math.min(limit * repeats, 16)),
+						// Fully parallel: limit<=12 and repeats<=2 bound this at 24 jobs anyway.
+						"--workers", String(Math.min(limit * repeats, 64)),
 						"--out", probeDir,
 						// Must match the cap the baseline (and the driver's eval) runs under, or the
 						// optimizer probes its candidate under a stricter budget than it is scored on.

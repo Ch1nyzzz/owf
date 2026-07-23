@@ -4,24 +4,24 @@
 # cost: USD per 1M tokens (input/output), used for journal cost accounting only.
 
 # Roster locked 2026-07-22 (user decision):
-#   SUT tiers (both gpugeek): deepseek-v4-flash = cheap execution, deepseek-v4-pro = strong reasoning
-#     NOTE: V4-Pro currently returns "model not bound to requested spec" on gpugeek —
-#     bind it in the console before running workflows that route to it.
+#   SUT tiers: deepseek-v4-flash = cheap execution, deepseek-v4-pro = strong reasoning
+#     flash on gpugeek; pro on DeepSeek's own API (2026-07-23, see below)
 #   Optimizer/watchdog: gpt-5.6-terra via the Codex coding-plan subscription (OAuth, xhigh)
 models:
   deepseek-v4-pro:
-    # TEMP: via Together until the gpugeek key is authorized for V4-Pro
-    # ("model not bound to requested spec"). To switch back:
-    #   base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
-    #   model_id: Vendor3/DeepSeek-V4-Pro
-    #   api_key_env: SOLVER_API_KEY
-    base_url: https://api.together.xyz/v1
-    model_id: deepseek-ai/DeepSeek-V4-Pro
-    api_key_env: TOGETHER_API_KEY
+    # 2026-07-23: moved to the official DeepSeek API. Together rate-limited hard under our
+    # eval concurrency ("Too many tokens in a short window") — it killed 11/12 nodes in one
+    # realmath probe and 2/3 of the bcplus candidate's reviewer nodes, which was starting to
+    # make the optimizers write off the whole pro tier as unusable. gpugeek still answers
+    # "model not bound to requested spec" for Vendor3/DeepSeek-V4-Pro (key not authorized).
+    # Verified on the official API: 16 concurrent calls, zero 429, ~1.3s each.
+    base_url: https://api.deepseek.com
+    model_id: deepseek-v4-pro
+    api_key_env: DEEPSEEK_API_KEY
     context_window: 131072
     max_tokens: 32768
     reasoning: true
-    cost: { input: 1.20, output: 4.00 }   # approximate, reconcile with Together billing
+    cost: { input: 1.20, output: 4.00 }   # PLACEHOLDER — carried over from Together, reconcile with DeepSeek billing
 
   gpt-5.6-terra:
     catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
