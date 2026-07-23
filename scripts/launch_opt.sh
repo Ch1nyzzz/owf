@@ -41,12 +41,12 @@ shift 2
 case "$DOMAIN" in
   realmath)
     SEED=workflows/realmath/seed_parity.js
-    BASELINE=runs/realmath_seedv2_train66_k1
-    EVAL_ARGS=(--eval-max-tokens 300000)
+    BASELINE=runs/realmath_seed_train66_k1_b600k
+    EVAL_ARGS=(--eval-max-tokens 600000)
     ;;
   bcplus)
     SEED=workflows/bcplus/seed_parity.js
-    BASELINE=runs/bcplus_seedv2_train50_k3
+    BASELINE=runs/bcplus_seed_train50_k1_b600k
     EVAL_ARGS=(--eval-max-tokens 600000 --eval-limit 50)
     ;;
   *)
