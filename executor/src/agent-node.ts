@@ -1,6 +1,6 @@
 import { runAgentLoop, type AgentContext, type AgentLoopConfig, type AgentMessage, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
-import { Budget, promptTokens } from "./budget.js";
+import { Budget } from "./budget.js";
 import { Journal, preview } from "./journal.js";
 import { makeSubmitTool, SUBMIT_INSTRUCTION, SUBMIT_TOOL_NAME } from "./structured.js";
 import type { AgentOpts, HookState, ModelEntry, NodeOutcome, ToolRegistry, WorkflowHooks } from "./types.js";
@@ -234,7 +234,7 @@ export async function runAgentNode(prompt: string, opts: AgentOpts, seq: number,
 				const m = event.message as AssistantMessage;
 				if ((m as { role?: string }).role === "assistant" && m.errorMessage) lastError = m.errorMessage;
 				if ((m as { role?: string }).role === "assistant" && m.usage) {
-					const inTokens = promptTokens(m.usage);
+					const inTokens = m.usage.input ?? 0;
 					nodeTokens.input += inTokens;
 					nodeTokens.output += m.usage.output ?? 0;
 					deps.budget.addUsage(m.usage);

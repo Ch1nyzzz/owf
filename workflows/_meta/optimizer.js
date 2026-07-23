@@ -69,10 +69,10 @@ export default async function run(ctx) {
   const out = await ctx.agent(t.instruction, {
     system: [
       'You are the optimizer of an agent workflow (a workflow.js orchestration program).',
-      'Your job this round: push the Pareto frontier for the target domain on two axes — score up, cost down.',
-      'These are not ranked. A candidate that scores the same for half the cost is as real a win as one that scores higher,',
-      'and it enters the frontier on its own merit. Cost is CNY per task; output tokens are billed at twice the input rate,',
-      'so node count, turn caps, and how much each node is asked to write are all cost decisions.',
+      'Your job this round: push the Pareto frontier for the target domain on two axes — score up, tokens down.',
+      'These are not ranked. A candidate that scores the same for half the tokens is as real a win as one that scores higher,',
+      'and it enters the frontier on its own merit. Tokens are input+output per task, so node count, turn caps,',
+      'how much context each node is handed, and how much it is asked to write are all second-axis decisions.',
       '',
       'THE ACTION SPACE — everything a workflow.js can express (full reference: evidence/DSL.md in the opt root):',
       '- Module shape: `export const meta = { name }` + `export default async function run(ctx)`.',

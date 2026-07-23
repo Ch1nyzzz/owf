@@ -59,15 +59,24 @@ esac
 [[ -d "$BASELINE" ]] || { echo "baseline run missing: $BASELINE" >&2; exit 1; }
 [[ -f "$SEED" ]] || { echo "seed workflow missing: $SEED" >&2; exit 1; }
 
-# The baseline is the frontier's first point, so it needs a cost measurement taken
-# under the current token accounting. Fail here with the fix rather than let the
-# driver die one setsid layer away, where the message lands only in driver.log.
-if ! grep -q '"cost_per_task"' "$BASELINE/report.json" 2>/dev/null; then
-  echo "baseline $BASELINE has no cost_per_task: it predates cost accounting and cannot" >&2
-  echo "seed the cost axis. Re-measure it first, e.g." >&2
-  echo "  PYTHONPATH=bench python3 bench/owf_bench/core/runner.py --domain $DOMAIN \\" >&2
-  echo "    --workflow $SEED --subset train --repeats 3 --workers 64 --out <new-baseline-dir>" >&2
-  exit 1
+# §六 (基线诚实性): a baseline that dies on its own budget measures the cap, not the
+# model, and every later gain is inflated by however much of that cap the candidate
+# merely unlocked. Warn rather than block — the threshold is a judgement call, and the
+# run is still meaningful if you know the floor is soft.
+DEATHS="$(python3 -c "
+import json,sys
+r=json.load(open('$BASELINE/report.json'))
+s=r['statuses']; n=sum(s.values())
+d=s.get('budget_exceeded',0)+s.get('timeout',0)
+print(f'{d} {n} {d/n*100:.0f}')
+" 2>/dev/null || echo "")"
+if [[ -n "$DEATHS" ]]; then
+  read -r d n pct <<<"$DEATHS"
+  (( pct >= 10 )) && {
+    echo "WARNING: baseline $BASELINE lost $d/$n rollouts ($pct%) to budget/timeout." >&2
+    echo "         Gains measured against it will be partly 'candidate got more resources'." >&2
+    echo "         Consider raising --eval-max-tokens and re-measuring the baseline first." >&2
+  }
 fi
 
 # Refuse to double-start. Two drivers on one opt-root would interleave iter_NNN

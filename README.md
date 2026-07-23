@@ -4,8 +4,9 @@ Research project: instead of evolving a benchmark harness, we freeze a **thin, r
 (sandbox + state + agent loop) and evolve a per-domain **workflow.js** — an orchestration program
 that composes agent nodes (each a full tool-using rollout with its own system prompt, model, and
 tools), glue JS, and in-loop rails (hooks). Candidates are evaluated on a two-axis
-(score, cost) Pareto frontier — cost is CNY per task, with output tokens billed at
-twice the input rate, so "same score for less money" is a win in its own right.
+(score, tokens) Pareto frontier — tokens are input+output per task, so "same score for
+fewer tokens" is a win in its own right. We measure tokens rather than money because the
+solver endpoint publishes a single input rate and documents no cache pricing.
 
 ## Layout
 
