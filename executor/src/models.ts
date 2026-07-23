@@ -28,7 +28,7 @@ interface RawModel {
 	context_window?: number;
 	max_tokens?: number;
 	reasoning?: boolean;
-	cost?: { input?: number; output?: number };
+	cost?: { input?: number; output?: number; cache_read?: number };
 	/** Use a pi-ai provider catalog entry verbatim, e.g. "openai-codex/gpt-5.6-terra". */
 	catalog?: string;
 	/** Auth mode: "codex" reads the Codex CLI OAuth token per call. */
@@ -61,7 +61,7 @@ export function loadModels(configPath: string): Map<string, ModelEntry> {
 			cost: {
 				input: m.cost?.input ?? 0,
 				output: m.cost?.output ?? 0,
-				cacheRead: 0,
+				cacheRead: m.cost?.cache_read ?? 0,
 				cacheWrite: 0,
 			},
 			contextWindow: m.context_window ?? 131072,

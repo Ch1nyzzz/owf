@@ -1,7 +1,8 @@
 # SUT model registry. Keys are the names workflow.js uses in agent({model}).
 # All endpoints are OpenAI-compatible (pi-ai api: openai-completions).
 # api_key_env names the environment variable holding the key — keys never live here.
-# cost: USD per 1M tokens (input/output), used for journal cost accounting only.
+# cost: CNY per 1M tokens, used for journal cost accounting only. `input` is the
+#   cache-MISS price; `cache_read` is the cache-hit price (~50x cheaper on DeepSeek).
 
 # Roster locked 2026-07-22 (user decision):
 #   SUT tiers: deepseek-v4-flash = cheap execution, deepseek-v4-pro = strong reasoning
@@ -21,20 +22,23 @@ models:
     context_window: 131072
     max_tokens: 32768
     reasoning: true
-    cost: { input: 1.20, output: 4.00 }   # PLACEHOLDER — carried over from Together, reconcile with DeepSeek billing
+    cost: { input: 3.00, output: 6.00, cache_read: 0.025 }   # CNY/1M, official DeepSeek pricing
 
   gpt-5.6-terra:
     catalog: openai-codex/gpt-5.6-terra   # pi-ai provider catalog entry (272k ctx, 128k out)
     auth: codex                            # ~/.codex/auth.json OAuth token, re-read per call
 
   deepseek-v4-flash:
+    # Stays on gpugeek: it has never rate-limited us, and switching providers mid-experiment
+    # would split a run across two backends. DeepSeek's own price for this model is
+    # 1.00 / 2.00 / 0.02 (in / out / cache-hit, CNY per 1M) if we ever consolidate.
     base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
     model_id: Vendor3/DeepSeek-V4-Flash
     api_key_env: SOLVER_API_KEY
     context_window: 131072
     max_tokens: 32768
     reasoning: false
-    cost: { input: 0.14, output: 0.55 }
+    cost: { input: 1.00, output: 2.00, cache_read: 0.02 }   # CNY/1M, gpugeek's own rate unconfirmed
 
 
 
