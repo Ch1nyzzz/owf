@@ -13,6 +13,8 @@ tools), glue JS, and in-loop rails (hooks). Candidates are evaluated on a two-ax
   Built on official upstream [`@mariozechner/pi-agent-core`](https://www.npmjs.com/package/@mariozechner/pi-agent-core) (pinned).
 - `workflows/` — seed and candidate workflows per domain (the optimization target; NOT harness code).
 - `bench/` — Python evaluation driver: task loading, split management, k-repeats, grading, (score, tokens) accounting.
+- `scripts/launch_opt.sh` — how to start an optimization run. Detaches the driver with `setsid` and pins
+  the per-domain eval budget; never start `optimize.py` as a plain shell background job (it dies with the session).
 - `configs/models.yaml` — SUT model registry (OpenAI-compatible endpoints; keys via env, never committed).
 - `data/` — datasets and indexes (gitignored except committed split files).
 
