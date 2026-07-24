@@ -66,13 +66,101 @@ export default async function run(ctx) {
     },
   })
 
-  const out = await ctx.agent(t.instruction, {
+  // Two proposers, one per axis, run in parallel before the lead writes anything.
+  //
+  // A single agent told to improve both axes drifts to the cheap one: cutting tokens is
+  // predictable and verifiable in a 12-task probe, while raising score is neither. The
+  // bcplus run showed exactly that — three consecutive rounds whose own summaries were
+  // about token savings ("27.4% fewer tokens", "56-62% below parent cost", "cost
+  // containment ... at the same 6/12 score"), and its best score never moved off the seed.
+  // Splitting the mandate means the score proposer has no cheaper task to retreat to.
+  //
+  // Proposers investigate and argue; they do not write workflows and cannot run_probe.
+  // Probing is the expensive operation and stays with the lead, spent once on the
+  // candidate that actually ships rather than twice on proposals that may not.
+  const PROPOSAL_SCHEMA = {
+    type: 'object',
+    properties: {
+      parent: { type: 'string', description: 'which frontier point / earlier candidate you build on, and why' },
+      diagnosis: { type: 'string', description: 'the failure or waste pattern, with task ids and journal paths' },
+      mechanism: { type: 'string', description: 'the concrete change: which node, which prompt, which rail, which turn cap' },
+      code_sketch: { type: 'string', description: 'the workflow.js fragment that implements it — enough for the lead to integrate verbatim' },
+      expected: { type: 'string', description: 'predicted score and token effect, and which tasks should move' },
+      risk: { type: 'string', description: 'what this could break, and what evidence would disconfirm it' },
+    },
+    required: ['parent', 'diagnosis', 'mechanism', 'code_sketch', 'expected', 'risk'],
+  }
+
+  const proposerCommon = [
+    'You are one of two proposers serving the optimizer of an agent workflow. You do not write the candidate:',
+    'you investigate the evidence and hand the lead ONE concrete, implementable proposal for your assigned axis.',
+    'Ground every claim in evidence you actually read — cite task ids and journal paths. A proposal the lead cannot',
+    'trace back to data is worthless to it.',
+    'Read small things directly (reports, stability.json, notes, workflow sources) and send `investigate` readers at',
+    'anything bulky: rollout journals run to hundreds of KB and would exhaust your context.',
+    'Your code_sketch must fit the DSL (evidence/DSL.md) and use only deepseek-v4-flash.',
+    'Propose ONE mechanism, the one your evidence supports best — not a menu. Be specific enough to implement.',
+  ]
+
+  const propose = (axis, brief) =>
+    ctx.agent(`${t.instruction}\n\nYOUR AXIS THIS ROUND:\n${brief}`, {
+      system: [...proposerCommon, '', `YOUR AXIS: ${axis}`, brief].join('\n'),
+      model: readerModel,
+      thinkingLevel: 'high',
+      tools: ['read_file', 'list_dir', investigate],
+      maxTurns: 40,
+      schema: PROPOSAL_SCHEMA,
+      label: `propose_${axis}`,
+    })
+
+  const [scoreProposal, tokenProposal] = await ctx.parallel([
+    () =>
+      propose(
+        'score',
+        [
+          'RAISE THE SCORE. You own the accuracy axis and nothing else.',
+          'Start from the highest-scoring frontier point unless the evidence argues for another parent.',
+          'Find tasks that are failing and could be made to pass: read what the rollouts actually answered and why it was',
+          'wrong or absent. Then propose the structure, prompt, routing or rail that would fix that failure MODE on unseen',
+          'tasks of the same kind.',
+          'Extra tokens are allowed when they buy accuracy, but say what they buy: name the mechanism the spend funds.',
+          'Do NOT propose a change whose main effect is saving tokens — that is the other proposer\'s job, and a round',
+          'where both of you optimise cost is a wasted round.',
+        ].join(' '),
+      ),
+    () =>
+      propose(
+        'tokens',
+        [
+          'CUT THE TOKENS AT UNCHANGED SCORE. You own the cost axis and nothing else.',
+          'Start from the leanest frontier point unless the evidence argues for another parent.',
+          'Find waste, not work: turns that repeat themselves, nodes whose output nobody reads, context handed to a node',
+          'that does not need it, retries that never change the answer, verbose instructions that buy nothing. Read the',
+          'journals to distinguish a turn that changed the outcome from a turn that merely happened.',
+          'The score must hold. A change that saves tokens by giving up answers is a regression, not a win — if your',
+          'mechanism risks losing a correct answer, say so in `risk` and explain why the evidence says it will not.',
+        ].join(' '),
+      ),
+  ])
+
+  const proposals =
+    `\n\nPROPOSAL A — score axis:\n${JSON.stringify(scoreProposal, null, 1)}` +
+    `\n\nPROPOSAL B — token axis:\n${JSON.stringify(tokenProposal, null, 1)}`
+
+  const out = await ctx.agent(t.instruction + proposals, {
     system: [
       'You are the optimizer of an agent workflow (a workflow.js orchestration program).',
       'Your job this round: push the Pareto frontier for the target domain on two axes — score up, tokens down.',
       'These are not ranked. A candidate that scores the same for half the tokens is as real a win as one that scores higher,',
       'and it enters the frontier on its own merit. Tokens are input+output per task, so node count, turn caps,',
       'how much context each node is handed, and how much it is asked to write are all second-axis decisions.',
+      '',
+      'TWO PROPOSALS ARE ATTACHED to your instruction, one per axis, written by proposers who each saw only their own',
+      'mandate. They are evidence and argument, not orders. You ship ONE candidate this round, and it is yours: adopt one,',
+      'combine them where they compose cleanly, take a mechanism from one and drop its integration, or reject both and do',
+      'something the evidence supports better. Verify their citations before you trust them — a proposer that could not',
+      'probe may have mis-read a journal. State in your notes which proposal(s) you took and why you rejected what you did.',
+      'Two mechanisms that both touch the same node usually conflict; prefer shipping one cleanly over merging both badly.',
       '',
       'THE ACTION SPACE — everything a workflow.js can express (full reference: evidence/DSL.md in the opt root):',
       '- Module shape: `export const meta = { name }` + `export default async function run(ctx)`.',
@@ -111,9 +199,13 @@ export default async function run(ctx) {
         made_candidate: { type: 'boolean' },
         hypothesis: { type: 'string' },
         predictions: { type: 'string', description: 'which tasks should flip and expected token delta' },
+        proposals_used: {
+          type: 'string',
+          description: 'which of the two proposals you adopted, combined or rejected, and why — so the next round can tell a bad proposal from a bad integration',
+        },
         summary: { type: 'string' },
       },
-      required: ['made_candidate', 'hypothesis', 'summary'],
+      required: ['made_candidate', 'hypothesis', 'summary', 'proposals_used'],
     },
     label: 'optimize',
   })

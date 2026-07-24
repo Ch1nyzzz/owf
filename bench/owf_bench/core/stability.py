@@ -11,9 +11,27 @@ import argparse
 import json
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[3]
 
-def build(run_dir: Path) -> dict:
+
+def subset_ids(domain: str, subset: str) -> set[str]:
+    return set(json.loads((ROOT / "data" / domain / "split.json").read_text())[subset])
+
+
+def build(run_dir: Path, keep: set[str] | None = None) -> dict:
+    """Stability over the tasks in `keep` (default: everything the run measured).
+
+    The noise band is the std of the per-run macro scores, so it depends on how many
+    tasks the mean is taken over: shrinking a train split widens it (each task carries
+    more weight). Restricting an existing run to the new split therefore has to
+    recompute this rather than inherit it.
+    """
     results = [json.loads(l) for l in (run_dir / "results.jsonl").read_text().splitlines() if l.strip()]
+    if keep is not None:
+        missing = keep - {r["task_id"] for r in results}
+        if missing:
+            raise SystemExit(f"{run_dir} never measured {len(missing)} of the requested tasks, e.g. {sorted(missing)[:5]}")
+        results = [r for r in results if r["task_id"] in keep]
     by_task: dict[str, dict[int, float]] = {}
     for r in results:
         by_task.setdefault(r["task_id"], {})[r["rep"]] = r["score"]
@@ -68,9 +86,12 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--run-dir", required=True)
     p.add_argument("--out", help="default: <run-dir>/stability.json")
+    p.add_argument("--domain", help="restrict to a split subset of this domain (with --subset)")
+    p.add_argument("--subset", default="train", help="train|test, used with --domain")
     args = p.parse_args()
     run_dir = Path(args.run_dir)
-    report = build(run_dir)
+    keep = subset_ids(args.domain, args.subset) if args.domain else None
+    report = build(run_dir, keep)
     out = Path(args.out) if args.out else run_dir / "stability.json"
     out.write_text(json.dumps(report, indent=1))
     print(json.dumps({key: report[key] for key in ("k", "n_tasks", "mean_score", "noise_band", "counts")}, indent=1))
