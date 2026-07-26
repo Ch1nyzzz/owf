@@ -11,6 +11,19 @@ export const meta = { name: 'owf-optimizer', version: 2 }
 // overflow is an API error that kills the round. Dispatching readers moves the bulk into
 // child contexts and keeps the lead's turns cheap. It stays a TOOL rather than a fixed
 // triage->synthesize pipeline so the optimizer still decides what to investigate.
+// A reader's context is filled almost entirely by tool output, and nothing catches an
+// overflow: bcplus v2 round 5 lost a whole investigation to "Codex error: Your input
+// exceeds the context window of this model". The reader's system prompt asks it to stop
+// before that happens, but a reader deep in a failure cluster is the agent least likely to
+// heed advice about stopping, and 30 turns of full-size read_file is 1.4MB — five times the
+// window. So the advice gets a mechanism behind it. Blocking a read leaves the reader alive
+// holding everything it has already gathered, which is the entire difference from an
+// overflow: a report cut short still lands, a dead node returns nothing.
+//
+// 512KB is ~130-145k tokens of evidence, leaving a 272k window room to think and write. It
+// still buys ten full-size reads, enough to characterise a failure cluster.
+const READ_CAP_BYTES = 512 * 1024
+
 export default async function run(ctx) {
   const t = ctx.task
   const readerModel = t.opt_model || 'gpt-5.6-terra'
@@ -40,6 +53,9 @@ export default async function run(ctx) {
     // No schema on the reader: a schema node that hits maxTurns returns null and the
     // whole read is lost, whereas a text node returns whatever it last said.
     handler: async ({ question, paths }) => {
+      // Per-reader counters: each investigate call gets its own fresh context and its own cap.
+      let bytesRead = 0
+      let warned = false
       const out = await ctx.agent(
         `${question}\n\nStart from:\n${(paths || []).join('\n') || '(no paths given — locate them yourself with list_dir)'}`,
         {
@@ -60,6 +76,33 @@ export default async function run(ctx) {
           tools: ['read_file', 'list_dir'],
           maxTurns: 30,
           label: 'investigate',
+          // The two hooks split the job because the hook contract splits it: postToolUse
+          // sees the result but may only inject, preToolUse may block but never sees a
+          // result. So count in one, enforce in the other. The reader's only tools are
+          // reads, so blocking everything at the cap is exactly blocking further reading.
+          hooks: {
+            postToolUse: (_call, result) => {
+              bytesRead += result.content.length
+              if (!warned && bytesRead > READ_CAP_BYTES * 0.75) {
+                warned = true
+                return {
+                  inject:
+                    `You have taken in ${Math.round(bytesRead / 1024)}KB of evidence. Reads are cut off at ` +
+                    `${READ_CAP_BYTES / 1024}KB and there is no compaction behind your context. Start converging: ` +
+                    `at most a couple more targeted reads, then write your findings.`,
+                }
+              }
+            },
+            preToolUse: () => {
+              if (bytesRead > READ_CAP_BYTES) {
+                return {
+                  block:
+                    `Read cap reached (${Math.round(bytesRead / 1024)}KB). No further reads. ` +
+                    `Write your findings now from what you already have, and say what you did not get to look at.`,
+                }
+              }
+            },
+          },
         },
       )
       return out || '(reader returned nothing — it may have run out of turns before writing findings)'
@@ -209,5 +252,16 @@ export default async function run(ctx) {
     },
     label: 'optimize',
   })
-  return out || { made_candidate: false, hypothesis: '', summary: 'optimizer node failed' }
+  // The lead can die on its own (context overflow, maxTurns, a transport error) while the
+  // workflow itself returns cleanly — this very fallback is what makes it look clean, and
+  // run.ts then records status "ok". bcplus v2 round 8 passed for a healthy round for
+  // exactly that reason. `node_failed` is the flag the driver's health predicates read, so
+  // a dead lead is a watchdog event instead of a silently ordinary round.
+  return out || {
+    made_candidate: false,
+    node_failed: true,
+    hypothesis: '',
+    proposals_used: '',
+    summary: 'optimizer lead node returned nothing (context overflow, maxTurns, or transport error) — see its node_end status in the journal',
+  }
 }

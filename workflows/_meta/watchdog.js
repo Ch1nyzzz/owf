@@ -1,4 +1,4 @@
-export const meta = { name: 'owf-watchdog', version: 2 }
+export const meta = { name: 'owf-watchdog', version: 3 }
 
 // L1 watchdog: hand-written, frozen, single node. Top of the RSI tower — nothing watches it.
 // It is invoked ONLY when mechanical health predicates fire (computed by the driver, not by an LLM).
@@ -16,6 +16,14 @@ export const meta = { name: 'owf-watchdog', version: 2 }
 // directly upstream of the one component nothing else watches.
 // The tool is duplicated from optimizer.js rather than shared: sandbox.ts runs workflows as
 // vm.Script with require/import banned, so every workflow is a self-contained file.
+//
+// v3: the rewrite is delivered through write_workflow instead of a `rewrite` field on the
+// final verdict. bcplus round 4 diagnosed its optimizer correctly and produced a 15KB
+// rewrite, then the response carrying it failed mid-stream — the node returned null and the
+// entire intervention was recorded as "watchdog node failed". Staking a round's whole output
+// on one 17KB submission has no recovery path. Through the tool, the source is on disk the
+// instant it is written and the validation gate answers inline, so a rejected rewrite can be
+// retried rather than lost, and the verdict left to deliver is small.
 export default async function run(ctx) {
   const t = ctx.task
 
@@ -81,15 +89,22 @@ export default async function run(ctx) {
       'hundreds of KB and would exhaust your context before you reached a verdict. Ask readers for verbatim quotes and paths —',
       'your verdict is invalid without citations, and their findings are what you cite.',
       '',
-      '- healthy_stagnation: the optimizer investigates properly, hypotheses are reasonable, predictions are reconciled — the plateau likely reflects a model ceiling or noise floor. Do NOT touch anything.',
-      '- process_pathology: the optimization process itself is degenerate. You must cite concrete evidence (specific rounds, notes entries, edit history). Provide a full rewritten optimizer.js.',
-      '- operational_fault: the optimizer fails to run properly (context overruns, no candidates, tool misuse loops). Provide a full rewritten optimizer.js fixing the fault, changing as little else as possible.',
+      '- healthy_stagnation: the optimizer investigates properly, hypotheses are reasonable, predictions are reconciled — the plateau likely reflects a model ceiling or noise floor. Do NOT touch anything, and do NOT write a file.',
+      '- process_pathology: the optimization process itself is degenerate. You must cite concrete evidence (specific rounds, notes entries, edit history). Write a full rewritten optimizer.js.',
+      '- operational_fault: the optimizer fails to run properly (context overruns, no candidates, tool misuse loops). Write a full rewritten optimizer.js fixing the fault, changing as little else as possible.',
       'A rewrite without cited evidence is invalid. "A different approach might work better" is not evidence.',
+      '',
+      'HOW TO DELIVER A REWRITE: call write_workflow with the complete new optimizer.js source. Despite its name it',
+      'writes the optimizer replacement, not a domain candidate — the destination is fixed by the harness. It validates',
+      'before landing and returns the error inline on failure, so fix and call it again; nothing is written until it passes.',
+      'Write it as soon as you have decided, BEFORE composing your verdict: once the file lands it is safe even if your',
+      'final message never arrives. Then submit the verdict with a short evidence citation. Do not restate the source in',
+      'the verdict — the file is the deliverable and duplicating it risks losing both.',
       'If you rewrite: keep the module shape (`export const meta` + `export default async function run(ctx)`), keep the same tool names, and keep the system prompt principles unless they are the diagnosed problem.',
     ].join('\n'),
     model: t.opt_model || 'gpt-5.6-terra',
     thinkingLevel: t.opt_thinking || 'xhigh',
-    tools: ['read_file', 'list_dir', investigate],
+    tools: ['read_file', 'list_dir', 'write_workflow', investigate],
     maxTurns: 60,
     temperature: 0.0,
     schema: {
@@ -97,11 +112,13 @@ export default async function run(ctx) {
       properties: {
         verdict: { type: 'string', enum: ['healthy_stagnation', 'process_pathology', 'operational_fault'] },
         evidence: { type: 'string', description: 'cited rounds/files/lines supporting the verdict' },
-        rewrite: { type: 'string', description: 'full new optimizer.js source; empty string if verdict is healthy_stagnation' },
+        rewrite_written: { type: 'boolean', description: 'true if you delivered a rewrite via write_workflow' },
       },
       required: ['verdict', 'evidence'],
     },
     label: 'watchdog',
   })
+  // A null here no longer discards an intervention: if the node wrote its rewrite before
+  // dying, the driver finds the staged file and applies it regardless of this fallback.
   return out || { verdict: 'healthy_stagnation', evidence: 'watchdog node failed; defaulting to no-op' }
 }

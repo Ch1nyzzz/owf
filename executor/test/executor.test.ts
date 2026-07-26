@@ -150,6 +150,47 @@ test("postToolUse inject adds a user message before the next LLM call", async ()
 	assert.ok(userMsgs.includes("note: verify next"));
 });
 
+// The read cap that keeps optimizer.js's reader subagents inside their context window
+// (workflows/_meta/optimizer.js, READ_CAP_BYTES) rests on the two hooks composing: only
+// postToolUse sees how much a tool handed back, and only preToolUse can refuse the next
+// call. Nothing else in the stack catches a context overflow, so pin the contract here.
+test("postToolUse counting + preToolUse blocking enforces a cumulative read cap", async () => {
+	const executed: string[] = [];
+	const toolCall = (n: number) => mkAssistant([call(`c${n}`, "echo", { text: "0123456789" })], "toolUse");
+	const { streamFn, contexts } = mockStream([toolCall(1), toolCall(2), toolCall(3), mkAssistant([text("done")])]);
+	const { deps, outDir } = mkDeps(streamFn, { tools: echoTool(executed) as unknown as ToolRegistry });
+	const ctx = buildCtx(deps);
+
+	const CAP = 20; // each echo returns "echo: 0123456789" = 16 bytes, so the cap falls mid-stream
+	let bytesRead = 0;
+	let warned = false;
+	const out = await ctx.agent("go", {
+		system: "sys",
+		model: "mock",
+		tools: ["echo"],
+		hooks: {
+			postToolUse: (_c, r) => {
+				bytesRead += r.content.length;
+				if (!warned && bytesRead > CAP * 0.75) {
+					warned = true;
+					return { inject: "converge now" };
+				}
+			},
+			preToolUse: () => (bytesRead > CAP ? { block: "read cap reached" } : undefined),
+		},
+	});
+
+	assert.equal(out, "done");
+	// 16 bytes after the first call clears 0.75*CAP but not CAP; 32 after the second does.
+	assert.deepEqual(executed, ["0123456789", "0123456789"]);
+	assert.ok(contexts[1].messages.some((m) => (m as { content: unknown }).content === "converge now"));
+	const blocked = contexts[3].messages.filter((m) => (m as { role: string }).role === "toolResult").at(-1) as { content: Array<{ text: string }> };
+	assert.ok(blocked.content[0].text.includes("read cap reached"));
+	// The node survives the cap — that is the point: a truncated report still lands.
+	const nodeEnd = journalEvents(outDir).find((e) => e.type === "node_end") as { status: string };
+	assert.equal(nodeEnd.status, "ok");
+});
+
 test("onStop continue pushes the rollout onward, capped", async () => {
 	let stops = 0;
 	const { streamFn, contexts } = mockStream([

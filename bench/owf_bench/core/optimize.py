@@ -30,14 +30,31 @@ STAGNATION_ROUNDS = 5
 NO_CANDIDATE_STREAK = 3
 WATCHDOG_COOLDOWN = 5  # rounds between watchdog invocations
 
+# Frontier admission is exact: a higher train score is a higher train score.
+#
+# This was 0.0618 (realmath's measured noise band) and it cost us a real point. Round 4's
+# 0.640 @ 131,842 and round 2's 0.680 @ 146,698 differ by 0.040 — inside the band, so the
+# driver called them tied, compared tokens, and evicted the higher-scoring point. That is
+# the band deciding a statistical question the frontier has no standing to decide: with
+# k=1 evidence it cannot tell a 0.04 lucky draw from a 0.04 real gain, and guessing "noise"
+# throws away a candidate no later round can recover.
+#
+# Setting it to 0 only ever makes domination HARDER (a point must be no worse on score to
+# evict another), so the set grows rather than churns — the failure mode is a longer
+# frontier table, not a lost candidate. The statistical load moves to where the evidence
+# can carry it: the champion still owes k=3 confirmation plus the held-out test set.
+# The measured band stays in state.json and in the optimizer's prompt as EVIDENCE about
+# how much its scores wobble; it just no longer overrides the measurement.
+SCORE_BAND = 0.0
 
-def dominates(a: dict, b: dict, band: float) -> bool:
+
+def dominates(a: dict, b: dict, band: float = 0.0) -> bool:
     """Does `a` dominate `b` on (score up, tokens down)?
 
-    Score differences inside the noise band are ties, not wins: without that, run-to-run
-    jitter alone would keep evicting frontier points and the set would churn on noise.
-    Tokens get no band — they are near-deterministic for a given topology, and the whole
-    point of the second axis is to prefer the leaner of two candidates that score the same.
+    `band` is a score tolerance: differences within it count as ties rather than wins.
+    The driver passes SCORE_BAND (0.0) — see the note there for why. The parameter
+    survives because it is the honest way to express the comparison and the unit tests
+    pin both behaviours; nothing in the loop supplies a non-zero value.
     """
     score_better = a["score"] - b["score"] > band
     score_worse = b["score"] - a["score"] > band
@@ -122,10 +139,14 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"Optimization round {it} for domain '{domain}'.\n"
             f"Optimization root: {opt_root} (your notes: {opt_root}/NOTES.md; stability report: {stability}; "
             f"round history: {opt_root}/state.json; per-round artifacts under {opt_root}/iter_*/).\n"
-            f"\nCURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, tokens down), "
-            f"score noise band ±{band}:\n{frontier_table(frontier, band)}\n"
+            f"\nCURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, tokens down):\n"
+            f"{frontier_table(frontier, band)}\n"
             f"A candidate enters the frontier by not being dominated: it must beat some point on score "
-            f"(by more than the noise band) or use fewer tokens, without being worse on the other axis. "
+            f"or use fewer tokens, without being worse on the other axis. Admission is exact — a higher "
+            f"train score is a higher train score, and no noise tolerance is applied. For context on how "
+            f"much these scores wobble, the baseline measured a ±{band} run-to-run band across k repeats "
+            f"(evidence/stability.json); weigh that when you judge whether a small delta is worth building "
+            f"on, but the frontier records what was measured, not what survived a significance test. "
             f"Tokens are input+output per task, counting cache-miss input only. Every node, every turn and "
             f"every word a node is asked to write spends this budget.\n"
             f"Parent choice is YOURS: any frontier point, any earlier candidate (iter_*/candidate.js, each with "
@@ -157,8 +178,18 @@ def compute_predicates(state: dict) -> list[str]:
     recent = hist[-NO_CANDIDATE_STREAK:]
     if len(recent) == NO_CANDIDATE_STREAK and all(not h["candidate_made"] for h in recent):
         fired.append(f"no_candidate_{NO_CANDIDATE_STREAK}_rounds")
-    if hist and hist[-1].get("optimizer_status") in ("budget_exceeded", "timeout", "infra_error"):
-        fired.append(f"optimizer_{hist[-1]['optimizer_status']}")
+    last = hist[-1] if hist else None
+    if last and last.get("optimizer_status") in ("budget_exceeded", "timeout", "infra_error"):
+        fired.append(f"optimizer_{last['optimizer_status']}")
+    # A dead lead node does not show up in optimizer_status. optimizer.js catches the node's
+    # null and returns a fallback object, so the workflow exits cleanly and run.ts records
+    # "ok" — bcplus v2 round 8 read as a healthy round while its lead had died on a transport
+    # error. Only the fallback knows, so it says so via node_failed and we read it here.
+    # The round is not necessarily lost: write_workflow lands the candidate the moment it is
+    # called, so a lead that died after writing still leaves one behind and it is still
+    # evaluated. What fires here is the watchdog, not a retry.
+    if last and isinstance(last.get("result"), dict) and last["result"].get("node_failed"):
+        fired.append("optimizer_lead_node_failed")
     # Stagnation is now "the frontier stopped moving", not "the top score stopped rising":
     # a round that only made things cheaper is real progress on the second axis.
     recent_rounds = hist[-STAGNATION_ROUNDS:]
@@ -168,8 +199,23 @@ def compute_predicates(state: dict) -> list[str]:
 
 
 def run_watchdog(opt_root: Path, domain: str, it: int, predicates: list[str], opt_model: str, optimizer_path: Path, state: dict) -> None:
+    """Diagnose the optimizer; apply a rewrite if the watchdog staged one.
+
+    The rewrite arrives as a FILE (write_workflow -> optimizer.rewrite.js), not as a field
+    of the final verdict. It used to be a schema string, and bcplus round 4 showed why that
+    loses work: the watchdog finished its diagnosis and emitted a correct 15KB rewrite, but
+    the response carrying it died mid-stream (stopReason=error, usage all zero), so the node
+    returned null and the driver recorded "watchdog node failed; defaulting to no-op". A
+    17KB single-shot submission is the whole round's output riding on one response.
+
+    Writing through a tool fixes the two things that mattered: the source lands on disk the
+    moment it is written, so a later failure cannot unwrite it, and the validation gate
+    answers inline, so a rejected rewrite can be fixed and retried instead of killing the
+    round. The verdict itself is then small enough to be cheap to deliver.
+    """
     wd_dir = opt_root / f"iter_{it:03d}/watchdog"
     wd_dir.mkdir(parents=True, exist_ok=True)
+    staged = wd_dir / "optimizer.rewrite.js"
     task = {
         "id": f"watchdog-{domain}-iter{it:03d}",
         "instruction": (
@@ -181,7 +227,8 @@ def run_watchdog(opt_root: Path, domain: str, it: int, predicates: list[str], op
         "domain": domain,
         "opt_root": str(opt_root),
         "workflows_dir": str(ROOT / "workflows"),
-        "candidate_path": str(wd_dir / "unused.js"),
+        # write_workflow's fixed destination. For the watchdog that IS the deliverable.
+        "candidate_path": str(staged),
         "bench_root": str(ROOT / "bench"),
         "opt_model": opt_model,
         "opt_thinking": "xhigh",
@@ -194,9 +241,18 @@ def run_watchdog(opt_root: Path, domain: str, it: int, predicates: list[str], op
     verdict = summary.get("result") if isinstance(summary.get("result"), dict) else {}
     event = {"iter": it, "predicates": predicates, "verdict": verdict.get("verdict"), "evidence": str(verdict.get("evidence"))[:2000]}
 
-    if verdict.get("verdict") in ("process_pathology", "operational_fault") and verdict.get("rewrite"):
-        staged = wd_dir / "optimizer.rewrite.js"
+    # Backward compatibility: a watchdog that still returns the source inline gets it staged
+    # for it, so an older workflows/_meta/watchdog.js keeps working against this driver.
+    if not staged.exists() and verdict.get("rewrite"):
         staged.write_text(verdict["rewrite"])
+
+    # A staged file means the watchdog decided to intervene, whether or not its verdict
+    # survived the trip back. Trusting the file over the verdict is what makes the channel
+    # crash-tolerant; a rewrite that lands and then regresses is caught by maybe_rollback.
+    if staged.exists() and verdict.get("verdict") != "healthy_stagnation":
+        if not verdict.get("verdict"):
+            event["verdict_missing"] = True
+            print("  watchdog staged a rewrite but returned no verdict — applying the file it wrote")
         ok, msg = validate_workflow(staged)
         if ok:
             version = len([e for e in state["watchdog_events"] if e.get("applied")]) + 1
@@ -287,7 +343,9 @@ def main() -> None:
     else:
         state = {
             "domain": args.domain,
-            "noise_band": max(stability["noise_band"], 0.02),
+            # Recorded and shown to the optimizer as evidence about score stability.
+            # It does NOT gate frontier admission any more — see SCORE_BAND.
+            "noise_band": stability["noise_band"],
             # Pareto set on (score up, tokens down); the baseline is its first point.
             "frontier": [
                 {
@@ -351,7 +409,7 @@ def main() -> None:
                 point = {"workflow": str(candidate), "score": report["score"], "tokens": cand_tokens,
                          "tokens_per_task": report["tokens_per_task"], "report": str(iter_dir / "eval/report.json")}
                 before = best_by_score(state["frontier"])
-                state["frontier"], entered = update_frontier(state["frontier"], point, state["noise_band"])
+                state["frontier"], entered = update_frontier(state["frontier"], point, SCORE_BAND)
                 rec.update({"candidate_score": report["score"], "candidate_tokens": cand_tokens,
                             "delta": round(report["score"] - before["score"], 4),
                             "entered_frontier": entered,
