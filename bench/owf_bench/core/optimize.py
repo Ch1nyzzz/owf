@@ -168,6 +168,7 @@ def write_train_gold(opt_root: Path, domain: str, data_root: Path = ROOT / "data
         task = json.loads(line)
         if task["id"] in train_ids and "gold" in task:
             gold[task["id"]] = task["gold"]
+    (opt_root / "evidence").mkdir(parents=True, exist_ok=True)  # callers outside optimize.py (meta-harness arm) have no evidence dir yet
     (opt_root / "evidence/train_gold.json").write_text(json.dumps(gold, ensure_ascii=False, indent=1))
 
 
