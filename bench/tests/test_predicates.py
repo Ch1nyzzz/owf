@@ -5,7 +5,13 @@ Run: PYTHONPATH=bench python3 -m unittest discover -s bench/tests
 
 import unittest
 
-from owf_bench.core.optimize import NO_CANDIDATE_STREAK, STAGNATION_ROUNDS, compute_predicates
+from owf_bench.core.optimize import (
+    EXPLORE_HINT_ROUNDS,
+    NO_CANDIDATE_STREAK,
+    STAGNATION_ROUNDS,
+    compute_predicates,
+    stalled_rounds,
+)
 
 
 def rnd(it, *, status="ok", made=True, entered=True, result=None):
@@ -88,6 +94,30 @@ class TestStreaks(unittest.TestCase):
         history = [rnd(i, entered=False) for i in range(1, STAGNATION_ROUNDS)]
         history.append(rnd(STAGNATION_ROUNDS, entered=True))
         self.assertEqual(compute_predicates(state(history)), [])
+
+
+class TestStalledRounds(unittest.TestCase):
+    """Trailing no-frontier-entry streak that gates the design-level hint in the round
+    instruction (EXPLORE_HINT_ROUNDS). It counts from the tail: one entry resets it."""
+
+    def test_empty_history_is_zero(self):
+        self.assertEqual(stalled_rounds([]), 0)
+
+    def test_counts_trailing_rounds_without_entry(self):
+        history = [rnd(1), rnd(2, entered=False), rnd(3, entered=False)]
+        self.assertEqual(stalled_rounds(history), 2)
+
+    def test_a_frontier_entry_resets_the_streak(self):
+        history = [rnd(1, entered=False), rnd(2, entered=False), rnd(3), rnd(4, entered=False)]
+        self.assertEqual(stalled_rounds(history), 1)
+
+    def test_no_candidate_rounds_count_as_stalled(self):
+        history = [rnd(1), rnd(2, made=False, entered=False), rnd(3, made=False, entered=False)]
+        self.assertEqual(stalled_rounds(history), 2)
+
+    def test_hint_threshold_sits_below_the_watchdog_threshold(self):
+        # The optimizer gets the evidence before the watchdog gets the case.
+        self.assertLess(EXPLORE_HINT_ROUNDS, STAGNATION_ROUNDS)
 
 
 if __name__ == "__main__":

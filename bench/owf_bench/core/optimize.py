@@ -30,6 +30,15 @@ STAGNATION_ROUNDS = 5
 NO_CANDIDATE_STREAK = 3
 WATCHDOG_COOLDOWN = 5  # rounds between watchdog invocations
 
+# After this many rounds without a frontier entry, the round's instruction adds a reason
+# to re-open design-level decisions (topology, decomposition, roles). Runs freeze their
+# structure early — every observed run settles its topology within its first few rounds
+# and spends the rest on prompt-level edits — and a stalled frontier is the evidence that
+# the current design's neighborhood has stopped paying. Fires before the watchdog
+# (STAGNATION_ROUNDS=5): a stalled optimizer gets the evidence first, the watchdog only
+# if stalling continues.
+EXPLORE_HINT_ROUNDS = 3
+
 # Frontier admission is exact: a higher train score is a higher train score.
 #
 # This was 0.0618 (realmath's measured noise band) and it cost us a real point. Round 4's
@@ -128,11 +137,59 @@ def frontier_table(frontier: list[dict], band: float) -> str:
     return "\n".join(lines)
 
 
+def stalled_rounds(history: list[dict]) -> int:
+    """Consecutive trailing rounds without a frontier entry (a no-candidate round counts)."""
+    n = 0
+    for h in reversed(history):
+        if h.get("entered_frontier"):
+            break
+        n += 1
+    return n
+
+
+def write_train_gold(opt_root: Path, domain: str, data_root: Path = ROOT / "data") -> None:
+    """Expose TRAIN-split gold answers as optimizer evidence (evidence/train_gold.json).
+
+    The information boundary is the held-out test split, not gold per se: the candidate
+    workflow never sees gold (runner.py strips it), but the optimizer may see everything
+    on the train side. Its read scope stops at opt_root, so this file is the sanctioned
+    channel — without it a reader scanning a failed rollout has no way to decide whether
+    anything the trajectory produced was actually correct. Train ids only; test stays sealed.
+    """
+    tasks_file = data_root / domain / "tasks.jsonl"
+    split_file = data_root / domain / "split.json"
+    if not tasks_file.exists() or not split_file.exists():
+        return  # bridged domains (tb2/harbor) keep their data elsewhere; nothing to expose
+    train_ids = set(json.loads(split_file.read_text())["train"])
+    gold = {}
+    for line in tasks_file.read_text().splitlines():
+        if not line.strip():
+            continue
+        task = json.loads(line)
+        if task["id"] in train_ids and "gold" in task:
+            gold[task["id"]] = task["gold"]
+    (opt_root / "evidence/train_gold.json").write_text(json.dumps(gold, ensure_ascii=False, indent=1))
+
+
 def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str,
                      eval_max_tokens: int, eval_max_sec: int) -> dict:
     frontier = state["frontier"]
     band = state.get("noise_band", 0.04)
     stability = opt_root / "evidence/stability.json"
+    train_gold = opt_root / "evidence/train_gold.json"
+    gold_line = (
+        f"Train-set gold answers: {train_gold} (task_id -> gold) — evidence for judging what a rollout "
+        f"actually produced against what was required.\n"
+    ) if train_gold.exists() else ""
+    stalled = stalled_rounds(state["history"])
+    stalled_line = (
+        f"The frontier has not moved in the last {stalled} rounds. That is evidence about the design "
+        f"neighborhood, not only about the individual edits: refinements of the incumbent shape have "
+        f"stopped clearing the bar, so weigh whether the next gain lives at the design level — "
+        f"decomposition, topology, node roles, handoffs, budget split — and what the failure evidence "
+        f"says such a redesign should look like. Every earlier candidate sits under iter_*/ with its "
+        f"eval report, so designs already tried are a read away.\n"
+    ) if stalled >= EXPLORE_HINT_ROUNDS else ""
     return {
         "id": f"opt-{domain}-iter{it:03d}",
         "instruction": (
@@ -155,8 +212,10 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"Rollout journals for any evaluated run sit next to its report: one dir per (task, repeat), "
             f"each with journal.jsonl and per-node transcripts. The baseline run — every rollout behind the "
             f"stability report — is linked at {opt_root}/evidence/baseline.\n"
+            f"{gold_line}"
+            f"{stalled_line}"
             f"Your read scope is exactly {opt_root} and {ROOT / 'workflows'}; all evidence lives inside it. "
-            f"Paths outside are refused by design (gold answers under data/ are off-limits), so do not spend turns probing them.\n"
+            f"Paths outside are refused by design (the held-out test split stays sealed), so do not spend turns probing them.\n"
             f"Study the evidence, then write an improved candidate via write_workflow, update your notes, and submit your summary."
         ),
         "domain": domain,
@@ -320,6 +379,7 @@ def main() -> None:
         raise SystemExit(f"stability.json missing in {baseline} — run stability.py first (k>=3 gate)")
     shutil.copy(stability_src, opt_root / "evidence/stability.json")
     shutil.copy(ROOT / "docs/DSL.md", opt_root / "evidence/DSL.md")  # the action-space reference
+    write_train_gold(opt_root, args.domain)  # regenerated each launch so a split change propagates
 
     # The optimizer's read scope is opt_root + workflows/ (executor/src/tools/meta.ts).
     # The baseline run is a sibling directory outside that scope, so link it in — without
