@@ -172,18 +172,17 @@ def write_train_gold(opt_root: Path, domain: str, data_root: Path = ROOT / "data
     (opt_root / "evidence/train_gold.json").write_text(json.dumps(gold, ensure_ascii=False, indent=1))
 
 
-def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str,
-                     eval_max_tokens: int, eval_max_sec: int) -> dict:
-    frontier = state["frontier"]
-    band = state.get("noise_band", 0.04)
-    stability = opt_root / "evidence/stability.json"
+def build_gold_line(opt_root: Path) -> str:
     train_gold = opt_root / "evidence/train_gold.json"
-    gold_line = (
+    return (
         f"Train-set gold answers: {train_gold} (task_id -> gold) — evidence for judging what a rollout "
         f"actually produced against what was required.\n"
     ) if train_gold.exists() else ""
+
+
+def build_stalled_line(state: dict) -> str:
     stalled = stalled_rounds(state["history"])
-    stalled_line = (
+    return (
         f"The frontier has not moved in the last {stalled} rounds. That is evidence about the design "
         f"neighborhood, not only about the individual edits: refinements of the incumbent shape have "
         f"stopped clearing the bar, so weigh whether the next gain lives at the design level — "
@@ -191,6 +190,15 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
         f"says such a redesign should look like. Every earlier candidate sits under iter_*/ with its "
         f"eval report, so designs already tried are a read away.\n"
     ) if stalled >= EXPLORE_HINT_ROUNDS else ""
+
+
+def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_model: str, opt_thinking: str,
+                     eval_max_tokens: int, eval_max_sec: int) -> dict:
+    frontier = state["frontier"]
+    band = state.get("noise_band", 0.04)
+    stability = opt_root / "evidence/stability.json"
+    gold_line = build_gold_line(opt_root)
+    stalled_line = build_stalled_line(state)
     return {
         "id": f"opt-{domain}-iter{it:03d}",
         "instruction": (
@@ -230,6 +238,79 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
         "eval_max_tokens": eval_max_tokens,
         "eval_max_sec": eval_max_sec,
     }
+
+
+WORKFLOW_REP_CONTRACT = """THE REPRESENTATION — a workflow.js orchestration program (full reference: evidence/DSL.md):
+- Module shape: `export const meta = { name }` + `export default async function run(ctx)`.
+- ctx.agent(prompt, {system, model, tools, maxTurns, temperature, thinkingLevel, schema, label, hooks}) — one full agent rollout (a subagent). Every node writes its OWN system prompt. Returns final text / schema-validated object / null on failure.
+- Orchestration: ctx.pipeline(items, ...stages) (per-item flow, no barrier), ctx.parallel(thunks) (barrier), plain JS glue, ctx.budget for spend introspection. Multi-node structures — decompose→route→assemble, parallel explorers + judge, verify loops — are all expressible.
+- Model routing: deepseek-v4-flash is the ONLY model a candidate may select. Model choice is NOT a design axis — what varies is topology, per-node system prompts, turn budgets, tools, and rails. A "stronger reviewer" has to be built out of prompt, evidence, and structure, not a bigger model.
+- In-loop rails via hooks on any node: preToolUse->{block} | postToolUse->{inject} | onTurn->{stop|inject} | onStop->{continue, max 5}. Hooks may call ctx.agent — an LLM as a rail.
+- Structured output via the schema option; harness-fixed domain tools per DSL.md; custom tools via ctx.defineTool (handler may call ctx.agent or ctx.runTool).
+- Hard boundary: no new side-effect channels (raw network/fs/process), no information sources outside the benchmark rules, no bypassing token accounting. The repo's data/ directory is OFF-LIMITS — held-out gold lives there; evidence/train_gold.json is the only sanctioned gold channel."""
+
+
+def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> str:
+    frontier = state["frontier"]
+    band = state.get("noise_band", 0.04)
+    return (
+        f"Optimization round {it} for domain '{domain}'. Working directory: {opt_root} (the optimization root).\n\n"
+        f"CURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, tokens down):\n"
+        f"{frontier_table(frontier, band)}\n"
+        "A candidate enters the frontier by not being dominated: it must beat some point on score or use "
+        "fewer tokens, without being worse on the other axis. Admission is exact — no noise tolerance is "
+        f"applied. For context on how much scores wobble, the baseline measured a ±{band} run-to-run band "
+        "across k repeats (evidence/stability.json). Tokens are input+output per task.\n"
+        f"{build_gold_line(opt_root)}"
+        f"{build_stalled_line(state)}"
+        "Evidence layout: evidence/stability.json (per-task stability); evidence/baseline/ — the canonical "
+        "seed rollouts (one dir per task: journal.jsonl + full per-node transcripts); iter_*/eval/ — every "
+        "prior candidate's evaluation (results.jsonl, report.json, one rollout dir per task); "
+        "iter_*/proposals/ and iter_*/lead.out.md — prior rounds' deliberation; state.json — round history; "
+        "NOTES.md — cross-round memory.\n"
+        "Parent choice is YOURS: any frontier point or any earlier candidate (iter_*/candidate.js, each with "
+        "its eval report) — rejected candidates often contain good ideas that did not clear the bar alone."
+    )
+
+
+def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir: Path,
+                    opt_model: str, lead_timeout: int) -> tuple[Path, dict]:
+    """One optimization round on the codex trio (shared organization with the meta-harness arm)."""
+    from owf_bench.core.codex_trio import ArmSpec, run_trio
+
+    candidate = iter_dir / "candidate.js"
+    spec = ArmSpec(
+        subject="an agent workflow (a workflow.js orchestration program)",
+        rep_contract=WORKFLOW_REP_CONTRACT,
+        evidence_text=codex_evidence_text(opt_root, domain, it, state),
+        candidate_path=candidate,
+        validate_cmd=f"cd {EXECUTOR} && npx tsx src/run.ts --validate-only {candidate}",
+        lead_extra=(
+            f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "hypothesis": str, '
+            f'"predictions": str, "proposals_used": str, "summary": str}}.'
+        ),
+    )
+    t0 = time.time()
+    sessions = run_trio(opt_root, iter_dir, spec, opt_model, lead_timeout=lead_timeout)
+    rec: dict = {
+        "iter": it,
+        "optimizer_status": "ok" if sessions["lead"]["rc"] == 0 else "codex_error",
+        "optimizer_sec": round(time.time() - t0),
+        "sessions": sessions,
+        "candidate_made": candidate.exists(),
+    }
+    summary_file = iter_dir / "summary.json"
+    if summary_file.exists():
+        try:
+            rec["result"] = json.loads(summary_file.read_text())
+        except json.JSONDecodeError:
+            rec["result"] = summary_file.read_text()[:2000]
+    if candidate.exists():
+        ok, msg = validate_workflow(candidate)
+        if not ok:  # the lead's own validation pass missed; an invalid candidate is a no-candidate round
+            rec.update({"candidate_made": False, "validation_error": msg[:500]})
+            print(f"  candidate REJECTED by validation gate: {msg[:200]}")
+    return candidate, rec
 
 
 def compute_predicates(state: dict) -> list[str]:
@@ -358,6 +439,10 @@ def main() -> None:
     p.add_argument("--eval-max-sec", type=int, default=1800)
     p.add_argument("--opt-model", default="gpt-5.6-terra")
     p.add_argument("--opt-thinking", default="xhigh")
+    # "workflow": the pi _meta workflow optimizer (optimizer.js) with watchdog.
+    # "codex": the codex trio (2 proposers + lead), the organization shared with the
+    # meta-harness arm — no probes, watchdog disabled (predicates logged only).
+    p.add_argument("--proposer", choices=["workflow", "codex"], default="workflow")
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
     p.add_argument("--opt-max-sec", type=int, default=5400)
     args = p.parse_args()
@@ -437,22 +522,27 @@ def main() -> None:
         iter_dir = opt_root / f"iter_{it:03d}"
         (iter_dir / "opt").mkdir(parents=True, exist_ok=True)
 
-        task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking,
-                                args.eval_max_tokens, args.eval_max_sec)
-        task_file = iter_dir / "opt_task.json"
-        task_file.write_text(json.dumps(task))
-        t0 = time.time()
-        summary = sh_executor(optimizer_path, task_file, iter_dir / "opt", "_meta", args.opt_max_tokens, args.opt_max_sec)
-        candidate = Path(task["candidate_path"])
-        made = candidate.exists()
-        rec = {
-            "iter": it,
-            "optimizer_status": summary.get("status", "unknown"),
-            "optimizer_tokens": summary.get("totalTokens"),
-            "optimizer_sec": round(time.time() - t0),
-            "candidate_made": made,
-            "result": summary.get("result"),
-        }
+        if args.proposer == "codex":
+            candidate, rec = run_codex_round(opt_root, args.domain, it, state, iter_dir,
+                                             args.opt_model, args.opt_max_sec)
+            made = rec["candidate_made"]
+        else:
+            task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking,
+                                    args.eval_max_tokens, args.eval_max_sec)
+            task_file = iter_dir / "opt_task.json"
+            task_file.write_text(json.dumps(task))
+            t0 = time.time()
+            summary = sh_executor(optimizer_path, task_file, iter_dir / "opt", "_meta", args.opt_max_tokens, args.opt_max_sec)
+            candidate = Path(task["candidate_path"])
+            made = candidate.exists()
+            rec = {
+                "iter": it,
+                "optimizer_status": summary.get("status", "unknown"),
+                "optimizer_tokens": summary.get("totalTokens"),
+                "optimizer_sec": round(time.time() - t0),
+                "candidate_made": made,
+                "result": summary.get("result"),
+            }
 
         if made:
             # two-stage eval: k=1 screen (cheap), k=eval_repeats confirm only if promising.
@@ -484,12 +574,20 @@ def main() -> None:
         state["history"].append(rec)
         state_path.write_text(json.dumps(state, indent=1))
 
-        maybe_rollback(optimizer_path, state)
-        predicates = compute_predicates(state)
-        if predicates and it - state["last_watchdog_iter"] >= WATCHDOG_COOLDOWN:
-            print(f"  predicates fired: {predicates} -> watchdog")
-            run_watchdog(opt_root, args.domain, it, predicates, args.opt_model, optimizer_path, state)
-            state_path.write_text(json.dumps(state, indent=1))
+        if args.proposer == "codex":
+            # Watchdog disabled in trio mode (user decision, 2026-07-28): the optimizer is
+            # driver code + prompts, not a rewritable workflow file. Predicates stay on
+            # record so stalls and dead rounds remain visible in the log.
+            predicates = compute_predicates(state)
+            if predicates:
+                print(f"  predicates fired (logged only, watchdog disabled): {predicates}")
+        else:
+            maybe_rollback(optimizer_path, state)
+            predicates = compute_predicates(state)
+            if predicates and it - state["last_watchdog_iter"] >= WATCHDOG_COOLDOWN:
+                print(f"  predicates fired: {predicates} -> watchdog")
+                run_watchdog(opt_root, args.domain, it, predicates, args.opt_model, optimizer_path, state)
+                state_path.write_text(json.dumps(state, indent=1))
 
     # The champion still owes a k=3 confirmation and the held-out test set; the frontier
     # is measured at k=1 and picking its best point is exactly where luck accumulates.

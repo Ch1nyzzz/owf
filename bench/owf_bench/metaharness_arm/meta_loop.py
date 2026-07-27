@@ -1,24 +1,23 @@
 """Meta-harness baseline arm: evolve a free-form agent module, no workflow DSL.
 
-Faithful port of the meta-harness reference loop (stanford-iris-lab/meta-harness,
-reference_examples/terminal_bench_2/meta_harness.py) onto the owf benchmarks:
+Loop protocol from the meta-harness reference (stanford-iris-lab/meta-harness):
+append-only agents/ archive (hash-gated), one candidate per iteration via
+pending_eval.json with hypothesis/prediction on record, frontier_val.json +
+evolution_summary.jsonl as cross-iteration memory, import gate before
+evaluation.
 
-  per iteration:  propose (coding agent edits agents/)  ->  validate (import gate)
-                  ->  evaluate on train  ->  record evolution_summary + frontier.
+Optimizer organization: the SAME codex trio as the main arm (core/codex_trio.py
+— two axis-split proposers in parallel, one lead). The organization is a
+controlled variable of the arm comparison; the arms differ ONLY in the
+representation of the evolvable object (free JS module here, workflow DSL
+there). Substrate is likewise shared: candidates run through run-meta.ts on the
+executor's frozen stack, and iteration 0 is the canonical seed measurement.
 
-Substrate: candidates run on the SAME frozen executor stack as the workflow arm
-(pi agent loop, models registry, tool registry, Budget, Journal) through the
-run-meta.ts entry — the arms differ ONLY in the representation of the evolvable
-object (free JS module here; sandboxed workflow DSL there). The seed agent is
-one runAgentNode call with the parity seed's exact parameters, so baseline
-parity holds by construction.
-
-Kept from the paper's protocol: append-only agents/ archive (hash-gated), one
-candidate per iteration via pending_eval.json with hypothesis/prediction on
-record, frontier_val.json + evolution_summary.jsonl as cross-iteration memory,
-import gate before evaluation. Documented deviations: proposer is codex exec
-with gpt-5.6-terra (meta-model parity across arms, instead of Claude Code); the
-archive cold-starts from the parity seed only (no hand-written pattern library).
+Candidate runtime has no sandbox (free-code evolution is the point), so the
+cheating boundary gets a mechanical tripwire instead: a static scan rejects
+candidates that reach for fs/network/process or the repo's data/ (held-out
+gold). It is a tripwire, not a proof — the append-only archive stays auditable
+and the champion is reviewed before certification.
 """
 
 from __future__ import annotations
@@ -37,113 +36,95 @@ ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = ROOT / "executor"
 SEED_DIR = Path(__file__).resolve().parent / "agents_seed"
 
-from owf_bench.core.optimize import update_frontier, write_train_gold  # noqa: E402
+from owf_bench.core.codex_trio import ArmSpec, run_trio  # noqa: E402
+from owf_bench.core.optimize import EXPLORE_HINT_ROUNDS, update_frontier, write_train_gold  # noqa: E402
 
 DOMAIN_TOOLS = {"realmath": "['python']", "bcplus": "['search', 'open_doc']"}
 
+# Tripwire for the unsandboxed candidate runtime. Catches the obvious reaches for
+# ambient authority; the archive audit catches the subtle ones.
+FORBIDDEN_PATTERNS = [
+    "node:fs", "node:child_process", "node:net", "node:http", "node:https", "node:worker_threads",
+    "child_process", "require(", "fetch(", "XMLHttpRequest", "WebSocket",
+    "process.env", "process.exit", "readFileSync", "writeFileSync",
+    "data/realmath", "data/bcplus", "tasks.jsonl", "split.json",
+]
 
-def proposer_prompt(run_root: Path, domain: str, iteration: int, frontier: dict) -> str:
+
+def static_scan(agent_file: Path) -> list[str]:
+    src = agent_file.read_text()
+    return [p for p in FORBIDDEN_PATTERNS if p in src]
+
+
+def rep_contract(domain: str, agents_dir: Path) -> str:
+    return f"""THE REPRESENTATION — a free-form agent module (plain JS, no workflow DSL):
+- CREATE a new file agents/<candidate_name>.mjs exporting `async function solve(task, core)`.
+  Start from a copy of any existing agent (import/subclass allowed) or from scratch. Anything
+  expressible in JS is in scope: control flow, decomposition, parallel calls (Promise.all),
+  retries, verification loops, budget allocation, custom loop internals.
+- The core surface (frozen):
+  - core.runAgentNode(prompt, opts, seq, core.deps) — one full tool-using rollout.
+    opts: {{system, model, tools, maxTurns (cap 200), temperature, thinkingLevel, schema, label,
+    hooks}}. Returns {{result, status, turns, tokens}} (final text, or the schema-validated
+    object, or null on failure).
+  - core.deps — frozen model/tool/journal/budget wiring; pass it through.
+  - core.pi — the pi-agent-core module, for candidates that rewrite the agent loop itself.
+  - model must be 'deepseek-v4-flash' (the only SUT); tools for this domain: {DOMAIN_TOOLS[domain]}.
+- Existing files under agents/ and everything in the executor are READ-ONLY; the outer loop
+  verifies this and rejects the iteration on violation.
+- Hard boundary: the candidate must be a GENERAL mechanism — no branching on task ids, no
+  answer lookup tables, no scorer-specific strings. No filesystem, network, process or
+  environment access from candidate code (a static scan rejects it). The repo's data/
+  directory is OFF-LIMITS — held-out gold lives there; evidence/train_gold.json is the only
+  sanctioned gold channel."""
+
+
+def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled: int) -> str:
     pareto_lines = "\n".join(
         f"  - {p['name']}: score {p['score']:.4f}, {p['tokens']:,} tokens/task (report: {p['report']})"
         for p in frontier.get("pareto", [])
     ) or "  (empty)"
-    return f"""# Meta-harness proposer — iteration {iteration} ({domain})
-
-You evolve a free-form agent program for the {domain} benchmark. Run exactly one
-iteration: analyse the evidence, form one falsifiable hypothesis, implement ONE
-new candidate agent, and write the evaluation manifest. The outer loop
-evaluates after you exit — do not run the full evaluation yourself.
-
-## Objective
-
-Push the (score up, tokens down) Pareto frontier. Tokens are input+output per
-task. A candidate enters the frontier by not being dominated.
-
-Current frontier:
-{pareto_lines}
-
-## Evidence in this workspace
-
-- `frontier_val.json` — Pareto set and per-task best agents.
-- `evolution_summary.jsonl` — every prior candidate: hypothesis, changes, score,
-  tokens, statuses. Read this first; do not re-test a refuted hypothesis.
-- `iter_*/eval/` — full evaluation artifacts per prior candidate: per-task
-  `results.jsonl`, `report.json`, and one rollout dir per task with
-  `journal.jsonl` (every node, turn, tool call) plus full per-node transcripts
-  (`node-*.jsonl`). Analyse failed and successful trajectories deeply before
-  proposing.
-- `evidence/train_gold.json` — train-set gold answers. Use them only to classify
-  failure modes; never encode task-specific answers or gold-derived shortcuts
-  into runtime behavior.
-- `agents/` — every agent so far, baseline included. Read any, modify none.
-
-## Edit scope
-
-- CREATE a new file `agents/<candidate_name>.mjs` exporting
-  `async function solve(task, core)`. Start from a copy of any existing agent or
-  from scratch. Anything expressible in JS is in scope: control flow,
-  decomposition, parallel calls (Promise.all), retries, verification loops,
-  budget allocation, custom loop internals.
-- The core surface (frozen):
-  - `core.runAgentNode(prompt, opts, seq, core.deps)` — one full tool-using
-    rollout. opts: {{system, model, tools, maxTurns (cap 200), temperature,
-    thinkingLevel, schema, label, hooks}}. Returns {{result, status, turns,
-    tokens}} (result is final text, or the schema-validated object, or null).
-  - `core.deps` — frozen model/tool/journal/budget wiring; pass it through.
-    `core.deps.budget.spentTokens()` style introspection is available.
-  - `core.pi` — the pi-agent-core module, for candidates that rewrite the agent
-    loop itself instead of using runAgentNode.
-  - model must be 'deepseek-v4-flash' (the only SUT); tools for this domain:
-    {DOMAIN_TOOLS[domain]}.
-- Existing files under `agents/` and everything in the executor are READ-ONLY.
-  The outer loop verifies this and rejects the iteration on violation.
-- The candidate must be a GENERAL mechanism: no branching on task ids, no
-  answer lookup tables, no scorer-specific strings, no information sources
-  outside the benchmark tools, no bypassing token accounting.
-
-## Quality bar
-
-One mechanism per candidate — a hypothesis the evaluation can falsify. State in
-the manifest what evidence motivated it and what result would refute it.
-Validate before finishing (from {EXECUTOR}):
-`npx tsx src/run-meta.ts --validate-agent {run_root}/agents/<candidate_name>.mjs`
-Do not run the full evaluation.
-
-## Required output
-
-Write exactly `{run_root}/pending_eval.json`:
-
-{{
-  "iteration": {iteration},
-  "candidates": [
-    {{
-      "name": "<snake_case_name>",
-      "agent_file": "agents/<candidate_name>.mjs",
-      "hypothesis": "<falsifiable claim grounded in cited evidence>",
-      "changes": "<what the mechanism does, briefly>",
-      "prediction": "<expected score/token effect and which tasks should move>"
-    }}
-  ]
-}}
-
-The candidates array must contain exactly one entry.
-"""
-
-
-def snapshot_hashes(agents_dir: Path) -> dict[str, str]:
-    return {f.name: hashlib.sha1(f.read_bytes()).hexdigest()
-            for f in agents_dir.iterdir() if f.is_file()}
-
-
-def propose(run_root: Path, prompt: str, model: str, iter_dir: Path, timeout: int) -> bool:
-    out_file = iter_dir / "proposer_last_message.txt"
-    proc = subprocess.run(
-        ["codex", "exec", "-m", model, "-s", "workspace-write", "--skip-git-repo-check",
-         "--color", "never", "-o", str(out_file), "-"],
-        input=prompt, capture_output=True, text=True, timeout=timeout, cwd=run_root,
+    gold = run_root / "evidence/train_gold.json"
+    gold_line = (
+        f"Train-set gold answers: {gold} (task_id -> gold) — evidence for judging what a rollout "
+        "actually produced against what was required.\n"
+    ) if gold.exists() else ""
+    stalled_line = (
+        f"The frontier has not moved in the last {stalled} rounds. That is evidence about the design "
+        "neighborhood, not only about the individual edits: refinements of the incumbent shape have "
+        "stopped clearing the bar, so weigh whether the next gain lives at the design level — "
+        "decomposition, topology, node roles, handoffs, budget split — and what the failure evidence "
+        "says such a redesign should look like. Every earlier candidate sits under agents/ with its "
+        "eval report, so designs already tried are a read away.\n"
+    ) if stalled >= EXPLORE_HINT_ROUNDS else ""
+    return (
+        f"Optimization round {it} for domain '{domain}'. Working directory: {run_root} (the run root).\n\n"
+        f"CURRENT PARETO FRONTIER on (score up, tokens down):\n{pareto_lines}\n"
+        "A candidate enters the frontier by not being dominated: it must beat some point on score or use "
+        "fewer tokens, without being worse on the other axis. Admission is exact. Tokens are input+output "
+        "per task.\n"
+        f"{gold_line}"
+        f"{stalled_line}"
+        "Evidence layout: evolution_summary.jsonl — every prior candidate: hypothesis, changes, score, "
+        "tokens, statuses; read it first and do not re-test a refuted hypothesis. frontier_val.json — "
+        "Pareto set and per-task best agents. iter_*/eval/ — full evaluation artifacts per prior "
+        "candidate (results.jsonl, report.json, one rollout dir per task with journal.jsonl and full "
+        "per-node transcripts). The canonical seed rollouts are the baseline evaluation referenced by "
+        "iteration 0 in evolution_summary.jsonl. agents/ — every agent so far; read any, modify none. "
+        "NOTES.md — cross-round memory."
     )
-    (iter_dir / "proposer_stderr.txt").write_text(proc.stderr[-8000:])
-    return proc.returncode == 0
+
+
+def meta_stalled_rounds(summary_path: Path) -> int:
+    if not summary_path.exists():
+        return 0
+    rows = [json.loads(l) for l in summary_path.read_text().splitlines() if l.strip()]
+    n = 0
+    for row in reversed(rows):
+        if row.get("entered_pareto"):
+            break
+        n += 1
+    return n
 
 
 def validate_agent(agent_file: Path) -> tuple[bool, str]:
@@ -168,6 +149,11 @@ def evaluate_candidate(agent_file: Path, domain: str, eval_dir: Path, workers: i
     return json.loads(report_path.read_text())
 
 
+def snapshot_hashes(agents_dir: Path) -> dict[str, str]:
+    return {f.name: hashlib.sha1(f.read_bytes()).hexdigest()
+            for f in agents_dir.iterdir() if f.is_file()}
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--domain", required=True, choices=["realmath", "bcplus"])
@@ -180,7 +166,7 @@ def main() -> None:
     p.add_argument("--max-sec", type=int, default=1800)
     p.add_argument("--limit", type=int, help="cap train tasks (smoke runs)")
     p.add_argument("--proposer-model", default="gpt-5.6-terra")
-    p.add_argument("--propose-timeout", type=int, default=5400)
+    p.add_argument("--lead-timeout", type=int, default=5400)
     args = p.parse_args()
 
     if args.domain == "bcplus":  # fail fast, not 50 tasks deep
@@ -208,11 +194,7 @@ def main() -> None:
     if frontier_path.exists():
         frontier = json.loads(frontier_path.read_text())
     else:
-        # Shared iteration 0: every arm evolves from the SAME canonical seed measurement
-        # (score, tokens, per-task results) — no arm re-measures the seed. The substrate
-        # is path-identical (run-meta.ts -> the same runAgentNode call as the workflow
-        # seed), so the canonical numbers transfer; the arms' own earlier seed
-        # re-measurements are kept on record as the empirical noise band around it.
+        # Shared iteration 0: every arm evolves from the SAME canonical seed measurement.
         base = Path(args.baseline_run).resolve()
         report = json.loads((base / "report.json").read_text())
         base_tokens = report.get("tokens_per_task_total")
@@ -242,18 +224,34 @@ def main() -> None:
         pending = run_root / "pending_eval.json"
         pending.unlink(missing_ok=True)
 
-        prompt = proposer_prompt(run_root, args.domain, it, frontier)
-        (iter_dir / "proposer_prompt.md").write_text(prompt)
+        spec = ArmSpec(
+            subject="a free-form agent program (a plain-JS agent module)",
+            rep_contract=rep_contract(args.domain, agents_dir),
+            evidence_text=evidence_text(run_root, args.domain, it, frontier,
+                                        meta_stalled_rounds(summary_path)),
+            candidate_path=Path(f"{agents_dir}/<candidate_name>.mjs (a NEW file; you choose the name)"),
+            validate_cmd=f"cd {EXECUTOR} && npx tsx src/run-meta.ts --validate-agent <your file>",
+            lead_extra=(
+                f"- Also write exactly {pending}:\n"
+                '  {"iteration": N, "candidates": [{"name": "<snake_case_name>", '
+                '"agent_file": "agents/<candidate_name>.mjs", "hypothesis": "<falsifiable claim '
+                'grounded in cited evidence>", "changes": "<what the mechanism does>", '
+                '"prediction": "<expected score/token effect and which tasks should move>"}]}\n'
+                "  The candidates array must contain exactly one entry."
+            ),
+        )
         t0 = time.time()
-        ok = propose(run_root, prompt, args.proposer_model, iter_dir, args.propose_timeout)
-        row: dict = {"iteration": it, "proposer_sec": round(time.time() - t0), "proposer_ok": ok}
+        sessions = run_trio(run_root, iter_dir, spec, args.proposer_model,
+                            lead_timeout=args.lead_timeout)
+        row: dict = {"iteration": it, "sessions": sessions,
+                     "proposer_sec": round(time.time() - t0)}
 
-        # Append-only gate: a proposer that edited history invalidates the iteration.
+        # Append-only gate: a trio that edited history invalidates the iteration.
         tampered = [n for n, h in before.items()
                     if not (agents_dir / n).exists()
                     or hashlib.sha1((agents_dir / n).read_bytes()).hexdigest() != h]
         if tampered:
-            for n in tampered:  # restore from the pristine seed if possible, else flag hard
+            for n in tampered:
                 if (SEED_DIR / n).exists():
                     shutil.copy(SEED_DIR / n, agents_dir / n)
             row.update({"rejected": f"modified existing agents: {tampered}"})
@@ -264,7 +262,7 @@ def main() -> None:
         if not pending.exists():
             row.update({"rejected": "no pending_eval.json"})
             record(row)
-            print("  REJECTED: proposer wrote no pending_eval.json")
+            print("  REJECTED: lead wrote no pending_eval.json")
             continue
         manifest = json.loads(pending.read_text())
         cands = manifest.get("candidates") or []
@@ -278,6 +276,12 @@ def main() -> None:
         if agents_dir not in agent_file.parents or not agent_file.exists():
             row.update({"rejected": f"agent_file outside agents/ or missing: {cand.get('agent_file')}"})
             record(row)
+            continue
+        hits = static_scan(agent_file)
+        if hits:
+            row.update({"rejected": f"static scan: forbidden patterns {hits}"})
+            record(row)
+            print(f"  REJECTED: forbidden patterns {hits}")
             continue
         valid, msg = validate_agent(agent_file)
         if not valid:
