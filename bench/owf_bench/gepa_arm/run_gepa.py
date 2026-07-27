@@ -50,7 +50,7 @@ def main() -> None:
 
     print(f"GEPA {args.domain}: {len(adapter.trainset)} train tasks, budget {args.max_metric_calls} metric calls")
     result = gepa.optimize(
-        seed_candidate={"system_prompt": SEED_PROMPTS[args.domain]},
+        seed_candidate=SEED_PROMPTS[args.domain],  # already a component dict (e.g. head/tail)
         trainset=adapter.trainset,
         adapter=adapter,
         reflection_lm=reflection_lm,
