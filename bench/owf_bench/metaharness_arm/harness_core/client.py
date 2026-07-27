@@ -67,8 +67,28 @@ class FlashClient:
                 usage = data.get("usage", {})
                 self.tokens["input"] += int(usage.get("prompt_tokens", 0))
                 self.tokens["output"] += int(usage.get("completion_tokens", 0))
-                return data["choices"][0]["message"]
+                return _sanitize(data["choices"][0]["message"])
             except Exception as e:  # transport/5xx; the caller cannot fix these
                 last_err = e
                 time.sleep(5 * (attempt + 1))
         raise RuntimeError(f"solver call failed after 3 attempts: {last_err}")
+
+
+def _sanitize(msg: dict) -> dict:
+    """Reduce an assistant message to the fields the API accepts back as input.
+
+    Endpoints decorate responses (reasoning_content, annotations, null content)
+    and then 400 when those decorations are echoed into the next request —
+    metaharness_bcplus_v1 iter 0 lost 29/50 tasks to exactly that. Empty
+    tool-call arguments are normalized to "{}" for the same reason.
+    """
+    clean: dict = {"role": "assistant", "content": msg.get("content") or ""}
+    calls = msg.get("tool_calls")
+    if calls:
+        clean["tool_calls"] = [
+            {"id": c["id"], "type": "function",
+             "function": {"name": c["function"]["name"],
+                          "arguments": c["function"].get("arguments") or "{}"}}
+            for c in calls
+        ]
+    return clean

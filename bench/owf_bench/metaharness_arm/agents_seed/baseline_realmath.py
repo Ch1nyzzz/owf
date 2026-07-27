@@ -89,7 +89,10 @@ class AgentHarness:
                         return None
                     result = "validation error: answer must be a list of strings"
                 elif fn in DISPATCH and args is not None:
-                    result = DISPATCH[fn](args)
+                    try:
+                        result = DISPATCH[fn](args)
+                    except Exception as e:  # executor semantics: a throwing handler is an error tool result, not a dead rollout
+                        result = f"tool error: {e}"
                 else:
                     result = f"unknown tool or bad arguments: {fn}"
                 self.log({"turn": turn, "tool": fn, "result_preview": str(result)[:2048]})
