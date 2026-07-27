@@ -1,113 +1,23 @@
-export const meta = { name: 'owf-optimizer', version: 2 }
+export const meta = { name: 'owf-optimizer', version: 4 }
 
-// L0 optimizer: one strong agent with privileged tools, free to investigate and edit.
+// L0 optimizer: a lead with privileged tools, fed by two axis-split proposers.
 // Principles live in the system prompt; noise facts live in the DATA it reads
 // (stability report). No case law, no quota rules.
 //
-// v2: reader subagents (OPTIMIZER_PLAN §三 "证据太长时才用编排分诊"). The evidence
-// surface is ~29MB (198 rollouts x journal + node transcripts) against a 272k window,
-// so the lead cannot read it directly — 22 turns of full-size read_file calls fill the
-// context, and there is no compaction anywhere in the stack (§四 forbids it on purpose):
-// overflow is an API error that kills the round. Dispatching readers moves the bulk into
-// child contexts and keeps the lead's turns cheap. It stays a TOOL rather than a fixed
-// triage->synthesize pipeline so the optimizer still decides what to investigate.
-// A reader's context is filled almost entirely by tool output, and nothing catches an
-// overflow: bcplus v2 round 5 lost a whole investigation to "Codex error: Your input
-// exceeds the context window of this model". The reader's system prompt asks it to stop
-// before that happens, but a reader deep in a failure cluster is the agent least likely to
-// heed advice about stopping, and 30 turns of full-size read_file is 1.4MB — five times the
-// window. So the advice gets a mechanism behind it. Blocking a read leaves the reader alive
-// holding everything it has already gathered, which is the entire difference from an
-// overflow: a report cut short still lands, a dead node returns nothing.
-//
-// 512KB is ~130-145k tokens of evidence, leaving a 272k window room to think and write. It
-// still buys ten full-size reads, enough to characterise a failure cluster.
-const READ_CAP_BYTES = 512 * 1024
+// v4 removes the reader layer (v2's `investigate` subagents; v3 was a watchdog rewrite
+// local to opt_realmath_v6). Readers existed so the lead could sweep a ~29MB evidence
+// surface without filling its 272k window — but the proposer split already provides
+// exactly that: each proposer is a disposable context that reads raw evidence and hands
+// back one compressed proposal. The proposers ARE the readers. Removing the extra layer
+// removes the unbounded fan-out failure class with it (opt_realmath_v6 iter 2 lost its
+// round to 38 readers eating the 9000s wall clock before the lead ran) and one hop of
+// lossy handoff. The cost: a proposer that reads past its own window dies and its
+// proposal arrives as null — paid by the node that overspent, not by the round, which
+// continues on the other proposal.
 
 export default async function run(ctx) {
   const t = ctx.task
-  const readerModel = t.opt_model || 'gpt-5.6-terra'
-
-  const investigate = ctx.defineTool({
-    name: 'investigate',
-    description:
-      'Dispatch a reader subagent over the evidence. It reads what you point it at and returns ONLY its findings — ' +
-      'the raw file contents never enter your context. Use it for anything bulky: sweeping rollout journals, ' +
-      'characterising a failure cluster, comparing how many tasks share a pattern. Ask one focused question per call; ' +
-      'you can dispatch several in one turn to cover different clusters.',
-    schema: {
-      type: 'object',
-      properties: {
-        question: {
-          type: 'string',
-          description: 'What to find out, and what to report back. Be specific — the reader cannot ask you follow-ups.',
-        },
-        paths: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Files or directories to start from (in-scope paths).',
-        },
-      },
-      required: ['question'],
-    },
-    // No schema on the reader: a schema node that hits maxTurns returns null and the
-    // whole read is lost, whereas a text node returns whatever it last said.
-    handler: async ({ question, paths }) => {
-      // Per-reader counters: each investigate call gets its own fresh context and its own cap.
-      let bytesRead = 0
-      let warned = false
-      const out = await ctx.agent(
-        `${question}\n\nStart from:\n${(paths || []).join('\n') || '(no paths given — locate them yourself with list_dir)'}`,
-        {
-          system: [
-            'You are a forensic reader serving the optimizer of an agent workflow.',
-            'Read the evidence you are pointed at (read_file, list_dir) and report FINDINGS ONLY:',
-            'concrete observations with file citations, counts, and the patterns you can support. State how many',
-            'cases you actually examined. If the evidence does not answer the question, say so plainly —',
-            'a clean negative is worth more than a guess.',
-            'No recommendations, no design ideas: your caller does that part.',
-            'Budget discipline: read_file returns at most 48KB per call and your context is finite.',
-            'Sample deliberately rather than reading everything, and once you are running low on turns,',
-            'STOP reading and write your findings — a report cut short still lands, an unwritten one does not.',
-            'Be dense. Your caller pays context for every token you return.',
-          ].join('\n'),
-          model: readerModel,
-          thinkingLevel: 'medium',
-          tools: ['read_file', 'list_dir'],
-          maxTurns: 30,
-          label: 'investigate',
-          // The two hooks split the job because the hook contract splits it: postToolUse
-          // sees the result but may only inject, preToolUse may block but never sees a
-          // result. So count in one, enforce in the other. The reader's only tools are
-          // reads, so blocking everything at the cap is exactly blocking further reading.
-          hooks: {
-            postToolUse: (_call, result) => {
-              bytesRead += result.content.length
-              if (!warned && bytesRead > READ_CAP_BYTES * 0.75) {
-                warned = true
-                return {
-                  inject:
-                    `You have taken in ${Math.round(bytesRead / 1024)}KB of evidence. Reads are cut off at ` +
-                    `${READ_CAP_BYTES / 1024}KB and there is no compaction behind your context. Start converging: ` +
-                    `at most a couple more targeted reads, then write your findings.`,
-                }
-              }
-            },
-            preToolUse: () => {
-              if (bytesRead > READ_CAP_BYTES) {
-                return {
-                  block:
-                    `Read cap reached (${Math.round(bytesRead / 1024)}KB). No further reads. ` +
-                    `Write your findings now from what you already have, and say what you did not get to look at.`,
-                }
-              }
-            },
-          },
-        },
-      )
-      return out || '(reader returned nothing — it may have run out of turns before writing findings)'
-    },
-  })
+  const optModel = t.opt_model || 'gpt-5.6-terra'
 
   // Two proposers, one per axis, run in parallel before the lead writes anything.
   //
@@ -139,8 +49,9 @@ export default async function run(ctx) {
     'you investigate the evidence and hand the lead ONE concrete, implementable proposal for your assigned axis.',
     'Ground every claim in evidence you actually read — cite task ids and journal paths. A proposal the lead cannot',
     'trace back to data is worthless to it.',
-    'Read small things directly (reports, stability.json, notes, workflow sources) and send `investigate` readers at',
-    'anything bulky: rollout journals run to hundreds of KB and would exhaust your context.',
+    'You read the evidence yourself (read_file, list_dir), and your context is the reading budget: a full-size read',
+    'is 48KB and nothing behind you catches an overflow. Sample deliberately — a handful of representative rollouts',
+    'read closely beats skimming everything. Once the evidence supports one mechanism, stop reading and write.',
     'Your code_sketch must fit the DSL (evidence/DSL.md) and use only deepseek-v4-flash.',
     'Propose ONE mechanism, the one your evidence supports best — not a menu. Be specific enough to implement.',
   ]
@@ -148,9 +59,9 @@ export default async function run(ctx) {
   const propose = (axis, brief) =>
     ctx.agent(`${t.instruction}\n\nYOUR AXIS THIS ROUND:\n${brief}`, {
       system: [...proposerCommon, '', `YOUR AXIS: ${axis}`, brief].join('\n'),
-      model: readerModel,
+      model: optModel,
       thinkingLevel: 'high',
-      tools: ['read_file', 'list_dir', investigate],
+      tools: ['read_file', 'list_dir'],
       maxTurns: 40,
       schema: PROPOSAL_SCHEMA,
       label: `propose_${axis}`,
@@ -219,7 +130,7 @@ export default async function run(ctx) {
       '- Hard boundary (not expressible, do not attempt): new side-effect channels (raw network/fs/process), information sources outside the benchmark rules, bypassing token accounting.',
       '',
       'How to work:',
-      '- Your context is finite and the evidence is not: the baseline alone is ~29MB across ~200 rollout dirs (journal.jsonl plus a per-node transcript each, median 121KB). Reading that yourself is impossible — a couple of dozen full-size read_file calls fill your window, and there is no compaction: you would simply die mid-round. So read small things directly (reports, stability.json, notes, workflow sources) and send `investigate` readers at everything bulky. Dispatch several in one turn when you have several questions. Their reading is free to you; only their findings cost you context.',
+      '- Your context is finite and the evidence is not: the baseline alone is ~29MB across ~200 rollout dirs (journal.jsonl plus a per-node transcript each, median 121KB), and there is no compaction behind you. The attached proposals carry the bulk investigation — the proposers read the raw journals so you do not have to. Read small things yourself (reports, stability.json, notes, workflow sources, earlier candidates) and make targeted read_file dips into specific journals to verify a citation before you build on it.',
       '- The candidate must be a GENERAL orchestration program. The train set is yours to study in full — read its journals, its per-task scores, and the answers your rollouts produced. But what you ship is a program that must work on tasks you have never seen: no branching on task ids, no lookup tables of known answers, no rules fitted to individual problems. Per-task evidence is for inferring the failure MODE; the fix goes in as structure, prompt, routing, or rails that would help an unseen task of that kind.',
       '- Evidence before rules. Any question answerable by reading data (journals, stability report, past notes, diffs) must be answered that way, not by intuition.',
       '- Before editing, write down in your notes: what failure pattern you are targeting (cite specific tasks/journal locations), your hypothesis, and a concrete prediction (which tasks should flip, expected token change).',
@@ -236,8 +147,8 @@ export default async function run(ctx) {
     ].join('\n'),
     model: t.opt_model || 'gpt-5.6-terra',
     thinkingLevel: t.opt_thinking || 'xhigh',
-    tools: ['read_file', 'list_dir', 'write_workflow', 'write_notes', 'run_probe', investigate],
-    maxTurns: 200,  // HARD_MAX_TURNS; reachable only because readers keep per-turn context small
+    tools: ['read_file', 'list_dir', 'write_workflow', 'write_notes', 'run_probe'],
+    maxTurns: 200,  // HARD_MAX_TURNS; sustainable because proposals and small files keep per-turn context cheap
     temperature: 0.2,
     schema: {
       type: 'object',
