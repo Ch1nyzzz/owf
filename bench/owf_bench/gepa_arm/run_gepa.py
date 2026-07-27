@@ -61,7 +61,7 @@ def main() -> None:
 
     best = result.best_candidate
     (out_root / "best_candidate.json").write_text(json.dumps(best, indent=1, ensure_ascii=False))
-    best_wf = adapter._write_candidate(best["system_prompt"])
+    best_wf = adapter._write_candidate(best)
     summary = {
         "best_workflow": str(best_wf),
         "reflection_calls": reflection_lm.calls,

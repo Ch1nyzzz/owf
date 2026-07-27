@@ -24,27 +24,35 @@ from gepa.core.adapter import EvaluationBatch
 
 ROOT = Path(__file__).resolve().parents[3]
 
-# Seed system prompts: the static text of each domain's parity seed, verbatim.
-# (realmath's per-task multi-part notice stays in the template — it is task-format
-# plumbing conditioned on a task field, which a static candidate string cannot express.)
+# Seed candidates: the static text of each domain's parity seed, verbatim.
+# realmath's seed interleaves a per-task multi-part notice MID-prompt (a conditional on
+# a task field, inexpressible in a static string), so its candidate is TWO components —
+# head and tail around the notice — keeping the seed byte-identical to the workflow
+# seed. GEPA candidates are Dict[component -> text]; it mutates them independently.
 SEED_PROMPTS = {
-    "realmath": (
-        "You are a research mathematician. Solve the problem exactly. "
-        "Use the python tool (sympy is available) to compute and verify your answer numerically or symbolically before submitting. "
-        "Submit exact symbolic expressions (SymPy-parseable strings), never decimal approximations. "
-        "Keep written reasoning brief; put computations in python. "
-        "If you cannot fully verify, still submit your best answer before running out of turns."
-    ),
-    "bcplus": (
-        "You are a persistent research agent working over a fixed document corpus. "
-        "The answer exists in the corpus. Decompose the clues, search with varied keyword combinations "
-        "(entities, dates, rare phrases), and open promising documents to verify every criterion. "
-        "If a search returns nothing useful, reformulate rather than give up. "
-        "You have a limited number of turns: track how many you have used, and once you are running low, "
-        "stop searching and commit to your best current candidate — an unverified best guess scores far "
-        "better than no answer at all. Never end without an answer. "
-        "End with the exact answer as: Final answer: <answer>."
-    ),
+    "realmath": {
+        "system_head": (
+            "You are a research mathematician. Solve the problem exactly. "
+            "Use the python tool (sympy is available) to compute and verify your answer numerically or symbolically before submitting. "
+            "Submit exact symbolic expressions (SymPy-parseable strings), never decimal approximations."
+        ),
+        "system_tail": (
+            "Keep written reasoning brief; put computations in python. "
+            "If you cannot fully verify, still submit your best answer before running out of turns."
+        ),
+    },
+    "bcplus": {
+        "system_prompt": (
+            "You are a persistent research agent working over a fixed document corpus. "
+            "The answer exists in the corpus. Decompose the clues, search with varied keyword combinations "
+            "(entities, dates, rare phrases), and open promising documents to verify every criterion. "
+            "If a search returns nothing useful, reformulate rather than give up. "
+            "You have a limited number of turns: track how many you have used, and once you are running low, "
+            "stop searching and commit to your best current candidate — an unverified best guess scores far "
+            "better than no answer at all. Never end without an answer. "
+            "End with the exact answer as: Final answer: <answer>."
+        ),
+    },
 }
 
 # Candidate templates: byte-identical to workflows/<domain>/seed_parity.js except the
@@ -55,7 +63,7 @@ TEMPLATES = {
 export default async function run(ctx) {
   const parts = ctx.task.answer_kind === 'multi' ? 'This problem has MULTIPLE answer parts; submit one string per part, in order.' : 'Submit a single-element list.'
   const out = await ctx.agent(ctx.task.instruction, {
-    system: __GEPA_SYSTEM_PROMPT__ + ' ' + parts,
+    system: __GEPA_system_head__ + ' ' + parts + ' ' + __GEPA_system_tail__,
     model: 'deepseek-v4-flash',
     tools: ['python'],
     maxTurns: 64,
@@ -73,7 +81,7 @@ export default async function run(ctx) {
 
 export default async function run(ctx) {
   const out = await ctx.agent(ctx.task.instruction, {
-    system: __GEPA_SYSTEM_PROMPT__,
+    system: __GEPA_system_prompt__,
     model: 'deepseek-v4-flash',
     tools: ['search', 'open_doc'],
     maxTurns: 64,
@@ -117,7 +125,7 @@ class OwfGEPAAdapter:
     # -- GEPAAdapter interface ------------------------------------------------
 
     def evaluate(self, batch, candidate, capture_traces=False):
-        wf = self._write_candidate(candidate["system_prompt"])
+        wf = self._write_candidate(candidate)
         self._call_seq += 1
         eval_dir = self.out_root / "evals" / f"{self._call_seq:04d}_{wf.stem.split('_')[-1]}"
         ids = [t["id"] for t in batch]
@@ -176,11 +184,14 @@ class OwfGEPAAdapter:
 
     # -- helpers --------------------------------------------------------------
 
-    def _write_candidate(self, system_prompt: str) -> Path:
-        digest = hashlib.sha1(system_prompt.encode()).hexdigest()[:10]
+    def _write_candidate(self, candidate: dict[str, str]) -> Path:
+        digest = hashlib.sha1(json.dumps(candidate, sort_keys=True).encode()).hexdigest()[:10]
         wf = self.out_root / "candidates" / f"candidate_{digest}.js"
         if not wf.exists():
-            wf.write_text(TEMPLATES[self.domain].replace("__GEPA_SYSTEM_PROMPT__", json.dumps(system_prompt)))
+            src = TEMPLATES[self.domain]
+            for component, text in candidate.items():
+                src = src.replace(f"__GEPA_{component}__", json.dumps(text))
+            wf.write_text(src)
         return wf
 
     def _full_answer(self, eval_dir: Path, task_id: str):
