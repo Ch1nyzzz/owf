@@ -60,20 +60,25 @@ def load_tasks(domain: str, subset: str, limit: int | None, task_ids: list[str] 
     return tasks[:limit] if limit else tasks
 
 
-def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, max_tokens: int, max_sec: int) -> dict:
+def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, max_tokens: int, max_sec: int,
+            agent_file: Path | None = None) -> dict:
     run_dir = out_dir / f"{task['id']}__r{rep}"
     run_dir.mkdir(parents=True, exist_ok=True)
     public = {k: v for k, v in task.items() if k not in ("gold", "judge_system", "judge_template")}
     task_file = run_dir / "task.json"
     task_file.write_text(json.dumps(public, ensure_ascii=False))
 
+    # meta-harness arm: same runner, same stack, different entry — the candidate is a
+    # free-form agent module (run-meta.ts) instead of a sandboxed workflow (run.ts).
+    entry = (["src/run-meta.ts", "--agent", str(agent_file)] if agent_file
+             else ["src/run.ts", "--workflow", str(workflow)])
+
     # resume: an existing verdict means the rollout is done; only grading re-runs
     if not (run_dir / "result.json").exists():
         for attempt in range(INFRA_RETRIES + 1):
             proc = subprocess.run(
                 [
-                    "npx", "tsx", "src/run.ts",
-                    "--workflow", str(workflow),
+                    "npx", "tsx", *entry,
                     "--task", str(task_file),
                     "--out", str(run_dir),
                     "--domain", domain,
@@ -117,7 +122,8 @@ def run_one(task: dict, workflow: Path, domain: str, out_dir: Path, rep: int, ma
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--domain", required=True)
-    p.add_argument("--workflow", required=True)
+    p.add_argument("--workflow", help="workflow.js candidate (run.ts entry)")
+    p.add_argument("--agent-file", help="meta-harness agent module (run-meta.ts entry)")
     p.add_argument("--subset", default="train", help="train|test|all")
     p.add_argument("--limit", type=int)
     p.add_argument("--task-ids", help="comma-separated task ids (within --subset); overrides --limit")
@@ -130,7 +136,10 @@ def main() -> None:
 
     ids = [t.strip() for t in args.task_ids.split(",") if t.strip()] if args.task_ids else None
     tasks = load_tasks(args.domain, args.subset, args.limit, ids)
-    workflow = Path(args.workflow).resolve()
+    if bool(args.workflow) == bool(args.agent_file):
+        raise SystemExit("exactly one of --workflow / --agent-file is required")
+    workflow = Path(args.workflow).resolve() if args.workflow else Path(args.agent_file).resolve()
+    agent_file = Path(args.agent_file).resolve() if args.agent_file else None
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -139,7 +148,7 @@ def main() -> None:
 
     results = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(run_one, t, workflow, args.domain, out_dir, rep, args.max_tokens, args.max_wallclock_sec): (t["id"], rep) for t, rep in jobs}
+        futures = {pool.submit(run_one, t, workflow, args.domain, out_dir, rep, args.max_tokens, args.max_wallclock_sec, agent_file): (t["id"], rep) for t, rep in jobs}
         for i, fut in enumerate(as_completed(futures), 1):
             r = fut.result()
             results.append(r)

@@ -1,4 +1,4 @@
-"""Meta-harness baseline arm: evolve a free-form Python agent, no workflow DSL.
+"""Meta-harness baseline arm: evolve a free-form agent module, no workflow DSL.
 
 Faithful port of the meta-harness reference loop (stanford-iris-lab/meta-harness,
 reference_examples/terminal_bench_2/meta_harness.py) onto the owf benchmarks:
@@ -6,21 +6,19 @@ reference_examples/terminal_bench_2/meta_harness.py) onto the owf benchmarks:
   per iteration:  propose (coding agent edits agents/)  ->  validate (import gate)
                   ->  evaluate on train  ->  record evolution_summary + frontier.
 
-Kept from the paper's protocol: append-only agents/ archive (new file per
-candidate, existing files immutable), pending_eval.json contract with exactly
-one candidate per iteration, hypothesis/changes on record, frontier + evolution
-summary as the proposer's cross-iteration memory, trace access for diagnosis.
+Substrate: candidates run on the SAME frozen executor stack as the workflow arm
+(pi agent loop, models registry, tool registry, Budget, Journal) through the
+run-meta.ts entry — the arms differ ONLY in the representation of the evolvable
+object (free JS module here; sandboxed workflow DSL there). The seed agent is
+one runAgentNode call with the parity seed's exact parameters, so baseline
+parity holds by construction.
 
-Documented deviations (docs/…, fairness to OUR matrix, not theirs):
-  - proposer = codex exec with gpt-5.6-terra, not Claude Code — all three arms
-    share the same meta model;
-  - evaluation = owf train split with (score, tokens) Pareto bookkeeping and the
-    same per-rollout budget as the other arms;
-  - archive seeds from the parity baseline only (no hand-written pattern library).
-
-What this arm is FOR: same evidence, same budget, same meta model as the main
-arm — the only variable left is the representation of the optimization target
-(free Python code here; explicit workflow DSL there).
+Kept from the paper's protocol: append-only agents/ archive (hash-gated), one
+candidate per iteration via pending_eval.json with hypothesis/prediction on
+record, frontier_val.json + evolution_summary.jsonl as cross-iteration memory,
+import gate before evaluation. Documented deviations: proposer is codex exec
+with gpt-5.6-terra (meta-model parity across arms, instead of Claude Code); the
+archive cold-starts from the parity seed only (no hand-written pattern library).
 """
 
 from __future__ import annotations
@@ -28,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -35,9 +34,12 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+EXECUTOR = ROOT / "executor"
 SEED_DIR = Path(__file__).resolve().parent / "agents_seed"
 
 from owf_bench.core.optimize import update_frontier, write_train_gold  # noqa: E402
+
+DOMAIN_TOOLS = {"realmath": "['python']", "bcplus": "['search', 'open_doc']"}
 
 
 def proposer_prompt(run_root: Path, domain: str, iteration: int, frontier: dict) -> str:
@@ -47,7 +49,7 @@ def proposer_prompt(run_root: Path, domain: str, iteration: int, frontier: dict)
     ) or "  (empty)"
     return f"""# Meta-harness proposer — iteration {iteration} ({domain})
 
-You evolve a Python agent harness for the {domain} benchmark. Run exactly one
+You evolve a free-form agent program for the {domain} benchmark. Run exactly one
 iteration: analyse the evidence, form one falsifiable hypothesis, implement ONE
 new candidate agent, and write the evaluation manifest. The outer loop
 evaluates after you exit — do not run the full evaluation yourself.
@@ -66,9 +68,10 @@ Current frontier:
 - `evolution_summary.jsonl` — every prior candidate: hypothesis, changes, score,
   tokens, statuses. Read this first; do not re-test a refuted hypothesis.
 - `iter_*/eval/` — full evaluation artifacts per prior candidate: per-task
-  `results.jsonl`, `report.json`, and per-task rollout dirs with
-  `trajectory.jsonl` (every turn, tool call and result preview). Analyse failed
-  and successful trajectories deeply before proposing.
+  `results.jsonl`, `report.json`, and one rollout dir per task with
+  `journal.jsonl` (every node, turn, tool call) plus full per-node transcripts
+  (`node-*.jsonl`). Analyse failed and successful trajectories deeply before
+  proposing.
 - `evidence/train_gold.json` — train-set gold answers. Use them only to classify
   failure modes; never encode task-specific answers or gold-derived shortcuts
   into runtime behavior.
@@ -76,28 +79,35 @@ Current frontier:
 
 ## Edit scope
 
-- CREATE a new file `agents/<candidate_name>.py` defining class `AgentHarness`.
-  Subclass or import any existing agent, or write from scratch. Anything
-  expressible in Python is in scope: control flow, decomposition, retries,
-  verification, multiple LLM calls, budget allocation.
-- The runner contract: `AgentHarness(client, log)` and
-  `solve(task, deadline) -> answer`. `client.chat(messages, tools=...)` is the
-  only model access; `client.spent()` reads the token budget consumed. `log(dict)`
-  appends to the task trajectory. Tool primitives live in
-  `owf_bench.metaharness_arm.harness_core.tools` (read-only): use DISPATCH or
-  call run_python/run_search/run_open_doc directly.
-- Existing files under `agents/`, and everything under
-  `bench/owf_bench/metaharness_arm/harness_core/`, are READ-ONLY. The outer loop
-  verifies this and rejects the iteration on violation.
+- CREATE a new file `agents/<candidate_name>.mjs` exporting
+  `async function solve(task, core)`. Start from a copy of any existing agent or
+  from scratch. Anything expressible in JS is in scope: control flow,
+  decomposition, parallel calls (Promise.all), retries, verification loops,
+  budget allocation, custom loop internals.
+- The core surface (frozen):
+  - `core.runAgentNode(prompt, opts, seq, core.deps)` — one full tool-using
+    rollout. opts: {{system, model, tools, maxTurns (cap 200), temperature,
+    thinkingLevel, schema, label, hooks}}. Returns {{result, status, turns,
+    tokens}} (result is final text, or the schema-validated object, or null).
+  - `core.deps` — frozen model/tool/journal/budget wiring; pass it through.
+    `core.deps.budget.spentTokens()` style introspection is available.
+  - `core.pi` — the pi-agent-core module, for candidates that rewrite the agent
+    loop itself instead of using runAgentNode.
+  - model must be 'deepseek-v4-flash' (the only SUT); tools for this domain:
+    {DOMAIN_TOOLS[domain]}.
+- Existing files under `agents/` and everything in the executor are READ-ONLY.
+  The outer loop verifies this and rejects the iteration on violation.
 - The candidate must be a GENERAL mechanism: no branching on task ids, no
-  answer lookup tables, no scorer-specific strings.
+  answer lookup tables, no scorer-specific strings, no information sources
+  outside the benchmark tools, no bypassing token accounting.
 
 ## Quality bar
 
 One mechanism per candidate — a hypothesis the evaluation can falsify. State in
-the manifest what evidence motivated it and what result would refute it. Run a
-quick import check (`PYTHONPATH={ROOT}/bench python3 -c "import ..."`) before
-finishing; do not run the full evaluation.
+the manifest what evidence motivated it and what result would refute it.
+Validate before finishing (from {EXECUTOR}):
+`npx tsx src/run-meta.ts --validate-agent {run_root}/agents/<candidate_name>.mjs`
+Do not run the full evaluation.
 
 ## Required output
 
@@ -108,7 +118,7 @@ Write exactly `{run_root}/pending_eval.json`:
   "candidates": [
     {{
       "name": "<snake_case_name>",
-      "agent_file": "agents/<candidate_name>.py",
+      "agent_file": "agents/<candidate_name>.mjs",
       "hypothesis": "<falsifiable claim grounded in cited evidence>",
       "changes": "<what the mechanism does, briefly>",
       "prediction": "<expected score/token effect and which tasks should move>"
@@ -122,7 +132,7 @@ The candidates array must contain exactly one entry.
 
 def snapshot_hashes(agents_dir: Path) -> dict[str, str]:
     return {f.name: hashlib.sha1(f.read_bytes()).hexdigest()
-            for f in agents_dir.glob("*.py")}
+            for f in agents_dir.iterdir() if f.is_file()}
 
 
 def propose(run_root: Path, prompt: str, model: str, iter_dir: Path, timeout: int) -> bool:
@@ -136,14 +146,26 @@ def propose(run_root: Path, prompt: str, model: str, iter_dir: Path, timeout: in
     return proc.returncode == 0
 
 
+def validate_agent(agent_file: Path) -> tuple[bool, str]:
+    proc = subprocess.run(["npx", "tsx", "src/run-meta.ts", "--validate-agent", str(agent_file)],
+                          cwd=EXECUTOR, capture_output=True, text=True, timeout=120)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
 def evaluate_candidate(agent_file: Path, domain: str, eval_dir: Path, workers: int,
                        max_tokens: int, max_sec: int, limit: int | None) -> dict | None:
-    from owf_bench.metaharness_arm.harness_core.runner import evaluate
-    try:
-        return evaluate(agent_file, domain, eval_dir, workers, max_tokens, max_sec, limit)
-    except Exception as e:
-        print(f"  eval failed: {e}")
+    cmd = ["python3", str(ROOT / "bench/owf_bench/core/runner.py"), "--domain", domain,
+           "--agent-file", str(agent_file), "--subset", "train", "--workers", str(workers),
+           "--out", str(eval_dir), "--max-tokens", str(max_tokens), "--max-wallclock-sec", str(max_sec)]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=14400,
+                          env={**os.environ, "PYTHONPATH": str(ROOT / "bench")})
+    report_path = eval_dir / "report.json"
+    if not report_path.exists():
+        print(f"  eval failed: {proc.stderr[-500:]}")
         return None
+    return json.loads(report_path.read_text())
 
 
 def main() -> None:
@@ -160,7 +182,6 @@ def main() -> None:
     args = p.parse_args()
 
     if args.domain == "bcplus":  # fail fast, not 50 tasks deep
-        import os
         base = os.environ.get("OWF_BCPLUS_SERVER", "http://127.0.0.1:8931")
         try:
             urllib.request.urlopen(f"{base}/search?q=ping&k=1", timeout=10)
@@ -170,7 +191,7 @@ def main() -> None:
     run_root = Path(args.run_root).resolve()
     agents_dir = run_root / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    baseline = f"baseline_{args.domain}.py"
+    baseline = f"baseline_{args.domain}.mjs"
     if not (agents_dir / baseline).exists():
         shutil.copy(SEED_DIR / baseline, agents_dir / baseline)
     write_train_gold(run_root, args.domain)  # same evidence parity as the main arm
@@ -191,14 +212,16 @@ def main() -> None:
                                     args.workers, args.max_tokens, args.max_sec, args.limit)
         if report is None:
             raise SystemExit("baseline evaluation failed — nothing to evolve against")
-        point = {"name": baseline[:-3], "workflow": str(agents_dir / baseline),
-                 "score": report["score"], "tokens": report["tokens_per_task_total"],
+        name = baseline.rsplit(".", 1)[0]
+        point = {"name": name, "workflow": str(agents_dir / baseline),
+                 "score": report["score"],
+                 "tokens": report["tokens_per_task_total"],
                  "report": str(eval_dir / "report.json")}
         frontier = {"pareto": [point],
-                    "per_task_best": {t: {"agent": baseline[:-3], "score": s}
+                    "per_task_best": {t: {"agent": name, "score": s}
                                       for t, s in report["task_scores"].items()}}
         frontier_path.write_text(json.dumps(frontier, indent=1))
-        record({"iteration": 0, "name": baseline[:-3], "hypothesis": "parity seed",
+        record({"iteration": 0, "name": name, "hypothesis": "parity seed",
                 "changes": "baseline", "score": report["score"],
                 "tokens_per_task_total": report["tokens_per_task_total"],
                 "statuses": report["statuses"], "report": str(eval_dir / "report.json"),
@@ -250,13 +273,11 @@ def main() -> None:
             row.update({"rejected": f"agent_file outside agents/ or missing: {cand.get('agent_file')}"})
             record(row)
             continue
-        try:  # import gate — the analogue of the main arm's write_workflow validation
-            from owf_bench.metaharness_arm.harness_core.runner import load_agent_class
-            load_agent_class(agent_file)
-        except Exception as e:
-            row.update({"rejected": f"import failed: {e!r}"})
+        valid, msg = validate_agent(agent_file)
+        if not valid:
+            row.update({"rejected": f"validation failed: {msg[:500]}"})
             record(row)
-            print(f"  REJECTED: import failed: {e!r}")
+            print(f"  REJECTED: {msg[:200]}")
             continue
 
         report = evaluate_candidate(agent_file, args.domain, iter_dir / "eval",
