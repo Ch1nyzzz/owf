@@ -172,6 +172,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--domain", required=True, choices=["realmath", "bcplus"])
     p.add_argument("--run-root", required=True)
+    p.add_argument("--baseline-run", required=True,
+                   help="canonical seed eval dir (report.json) — the shared iteration 0 for every arm")
     p.add_argument("--iterations", type=int, default=10)
     p.add_argument("--workers", type=int, default=32)
     p.add_argument("--max-tokens", type=int, default=600_000)
@@ -206,25 +208,29 @@ def main() -> None:
     if frontier_path.exists():
         frontier = json.loads(frontier_path.read_text())
     else:
-        print("=== iteration 0: baseline evaluation ===")
-        eval_dir = run_root / "iter_000/eval"
-        report = evaluate_candidate(agents_dir / baseline, args.domain, eval_dir,
-                                    args.workers, args.max_tokens, args.max_sec, args.limit)
-        if report is None:
-            raise SystemExit("baseline evaluation failed — nothing to evolve against")
+        # Shared iteration 0: every arm evolves from the SAME canonical seed measurement
+        # (score, tokens, per-task results) — no arm re-measures the seed. The substrate
+        # is path-identical (run-meta.ts -> the same runAgentNode call as the workflow
+        # seed), so the canonical numbers transfer; the arms' own earlier seed
+        # re-measurements are kept on record as the empirical noise band around it.
+        base = Path(args.baseline_run).resolve()
+        report = json.loads((base / "report.json").read_text())
+        base_tokens = report.get("tokens_per_task_total")
+        if base_tokens is None:
+            t = report["tokens_per_task"]
+            base_tokens = t["input"] + t["output"]
         name = baseline.rsplit(".", 1)[0]
         point = {"name": name, "workflow": str(agents_dir / baseline),
-                 "score": report["score"],
-                 "tokens": report["tokens_per_task_total"],
-                 "report": str(eval_dir / "report.json")}
+                 "score": report["score"], "tokens": base_tokens,
+                 "report": str(base / "report.json")}
         frontier = {"pareto": [point],
                     "per_task_best": {t: {"agent": name, "score": s}
                                       for t, s in report["task_scores"].items()}}
         frontier_path.write_text(json.dumps(frontier, indent=1))
         record({"iteration": 0, "name": name, "hypothesis": "parity seed",
-                "changes": "baseline", "score": report["score"],
-                "tokens_per_task_total": report["tokens_per_task_total"],
-                "statuses": report["statuses"], "report": str(eval_dir / "report.json"),
+                "changes": f"canonical baseline (shared iteration 0): {base}",
+                "score": report["score"], "tokens_per_task_total": base_tokens,
+                "statuses": report.get("statuses"), "report": str(base / "report.json"),
                 "entered_pareto": True})
 
     done = len([d for d in run_root.glob("iter_*") if (d / "eval/report.json").exists()])

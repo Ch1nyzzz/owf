@@ -22,7 +22,16 @@ if [[ -z "$DOMAIN" || -z "$OUT" ]]; then
 fi
 shift 2
 
+# Canonical seed baselines: the shared iteration 0 across all arms (same dirs as
+# launch_opt.sh). The seed candidate is served from this measurement, never re-rolled.
+case "$DOMAIN" in
+  realmath) BASELINE=runs/realmath_seed_train66_k1_b600k ;;
+  bcplus)   BASELINE=runs/bcplus_seed_train50_k1_b600k ;;
+  *) echo "unknown domain: $DOMAIN (expected realmath|bcplus)" >&2; exit 2 ;;
+esac
+
 [[ -f .env ]] || { echo ".env missing — the solver/judge keys live there" >&2; exit 1; }
+[[ -d "$BASELINE" ]] || { echo "baseline run missing: $BASELINE" >&2; exit 1; }
 
 RUNNING="$(pgrep -af "run_gepa\.py.*${OUT}" || true)"
 if [[ -n "$RUNNING" ]]; then
@@ -38,7 +47,7 @@ setsid nohup bash -c '
   set -a; source .env; set +a
   export PYTHONPATH=bench
   exec python3 -u bench/owf_bench/gepa_arm/run_gepa.py "$@"
-' _ --domain "$DOMAIN" --out "$OUT" "$@" >> "$LOG" 2>&1 < /dev/null &
+' _ --domain "$DOMAIN" --out "$OUT" --baseline-run "$BASELINE" "$@" >> "$LOG" 2>&1 < /dev/null &
 
 sleep 2
 PID="$(pgrep -f "run_gepa\.py.*${OUT}" | head -1 || true)"

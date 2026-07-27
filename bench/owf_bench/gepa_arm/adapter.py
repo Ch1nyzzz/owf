@@ -103,6 +103,10 @@ class OwfGEPAAdapter:
     max_sec: int = 1800
     workers: int = 16
     limit: int | None = None  # cap trainset size (smoke runs)
+    # Canonical seed eval dir — the shared iteration 0. When set, evaluating the
+    # unmutated seed candidate serves scores/outputs/trajectories from this run
+    # instead of re-rolling: every arm evolves from the SAME seed measurement.
+    baseline_run: Path | None = None
 
     # Optional GEPAAdapter protocol member: the engine probes this attribute directly,
     # and a plain class that omits it raises AttributeError. None selects the default
@@ -125,6 +129,8 @@ class OwfGEPAAdapter:
     # -- GEPAAdapter interface ------------------------------------------------
 
     def evaluate(self, batch, candidate, capture_traces=False):
+        if self.baseline_run is not None and candidate == SEED_PROMPTS[self.domain]:
+            return self._serve_seed_from_canonical(batch, capture_traces)
         wf = self._write_candidate(candidate)
         self._call_seq += 1
         eval_dir = self.out_root / "evals" / f"{self._call_seq:04d}_{wf.stem.split('_')[-1]}"
@@ -181,6 +187,25 @@ class OwfGEPAAdapter:
                 "Feedback": feedback[:4000],
             })
         return {c: records for c in components_to_update}
+
+    def _serve_seed_from_canonical(self, batch, capture_traces: bool):
+        """The seed's evaluation IS the canonical baseline run — replayed, not re-rolled."""
+        report = json.loads((self.baseline_run / "report.json").read_text())
+        task_scores = report["task_scores"]
+        outputs, scores, trajectories = [], [], []
+        for task in batch:
+            answer = self._full_answer(self.baseline_run, task["id"])
+            outputs.append({"task_id": task["id"], "answer": answer, "status": "canonical"})
+            scores.append(float(task_scores[task["id"]]))
+            if capture_traces:
+                trajectories.append({
+                    "task": task,
+                    "record": {"status": "canonical", "match_type": "canonical baseline"},
+                    "answer": answer,
+                    "transcript_tail": self._transcript_tail(self.baseline_run, task["id"]),
+                })
+        return EvaluationBatch(outputs=outputs, scores=scores,
+                               trajectories=trajectories if capture_traces else None)
 
     # -- helpers --------------------------------------------------------------
 

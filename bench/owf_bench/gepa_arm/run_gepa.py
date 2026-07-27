@@ -24,7 +24,10 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--domain", required=True, choices=sorted(SEED_PROMPTS))
     p.add_argument("--out", required=True)
-    p.add_argument("--max-metric-calls", type=int, default=600)
+    p.add_argument("--baseline-run", help="canonical seed eval dir — the shared iteration 0 (seed served, not re-rolled)")
+    # 650 = 600 evolution budget + the 50 seed valset calls the engine counts even
+    # though the canonical cache serves them without spending rollouts.
+    p.add_argument("--max-metric-calls", type=int, default=650)
     p.add_argument("--reflection-minibatch", type=int, default=3)
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--max-tokens", type=int, default=600_000)
@@ -41,7 +44,8 @@ def main() -> None:
     (out_root / "config.json").write_text(json.dumps(vars(args), indent=1, default=str))
 
     adapter = OwfGEPAAdapter(domain=args.domain, out_root=out_root, max_tokens=args.max_tokens,
-                             max_sec=args.max_sec, workers=args.workers, limit=args.limit)
+                             max_sec=args.max_sec, workers=args.workers, limit=args.limit,
+                             baseline_run=Path(args.baseline_run).resolve() if args.baseline_run else None)
     reflection_lm = CodexReflectionLM(log_dir=out_root / "reflection", model=args.reflection_model)
 
     print(f"GEPA {args.domain}: {len(adapter.trainset)} train tasks, budget {args.max_metric_calls} metric calls")
