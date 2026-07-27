@@ -20,11 +20,18 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def load_agent_class(agent_file: Path):
-    spec = importlib.util.spec_from_file_location(f"candidate_{agent_file.stem}", agent_file)
-    module = importlib.util.module_from_spec(spec)
-    # Registering the module lets a candidate subclass another candidate via import.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    # Import as a real package member (agents.<name>), not by bare file path: the
+    # proposer contract advertises subclassing existing agents, so a candidate's
+    # `from agents.baseline_realmath import AgentHarness` must resolve.
+    # metaharness_realmath_v1 iter 4 was rejected on exactly that import.
+    agent_file = agent_file.resolve()
+    pkg_dir = agent_file.parent
+    (pkg_dir / "__init__.py").touch()
+    root = str(pkg_dir.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import importlib as _importlib
+    module = _importlib.import_module(f"{pkg_dir.name}.{agent_file.stem}")
     return module.AgentHarness
 
 
