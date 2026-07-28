@@ -42,6 +42,7 @@ class CodexReflectionLM:
                 [
                     "codex", "exec",
                     "-m", self.model,
+                    "-c", 'model_reasoning_effort="xhigh"',
                     "-s", "read-only",
                     "--ephemeral",
                     "--skip-git-repo-check",

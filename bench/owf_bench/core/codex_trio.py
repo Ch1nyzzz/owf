@@ -68,31 +68,25 @@ YOUR MANDATE THIS ROUND:
 {axis_brief}
 """
 
-REPAIR_BRIEF = """REPAIR. You own the evidence of what actually happened.
-Start from the frontier point the evidence argues for. Read the failed rollouts: what was asked,
-what the trajectory produced, and what reached the final answer. Check whether a usable result
-already appeared somewhere in the trajectory and was lost on the way out — repairing that path
-is a different fix from making a part redo the work, and usually a cheaper one. Waste is a
-failure too: turns that repeat themselves, context handed to a step that does not need it,
-retries that never change the answer. Then propose the change that repairs that failure MODE on
-unseen tasks of the same kind — prompt, structure, routing, rail, or budget placement — and
-predict which tasks should flip and the token effect."""
+REPAIR_BRIEF = """REFINE. You own the current organization's performance.
+Take the frontier candidate as it is — its parts, connections and flow stay fixed — and make it
+score higher and spend fewer tokens. Read the rollouts: what was asked, what each part
+produced, what reached the final answer, and what the tokens were actually spent on. Check
+whether a usable result already appeared somewhere in the trajectory and was lost on the way
+out. Your instruments are the ones that leave the organization intact: each part's prompt, its
+turn and budget allocation, its rails, what context it is handed, what it is asked to write.
+Predict which tasks should flip and the token effect."""
 
 DESIGN_BRIEF = """DESIGN. You own the organization.
-Start from the structure of the task itself and design the workflow / swarm organization that
-fits it. Read the task instructions and a few trajectories to understand the anatomy of the
-work, then ask:
-- which subgoals are independent, and can be covered by separate parts with their own contexts;
-- where context grows as work proceeds, and what isolation keeps each part's context small;
-- where diverse parallel attempts explore better than one long attempt, and how their results
-  get adjudicated;
-- how partial results flow into the final answer without loss — deterministic assembly where
-  the logic is mechanical, a dedicated part where it is semantic;
-- how the per-task budget is best allocated across the parts.
-Any topology the representation can express is yours to use. Deliver ONE organizational design
-with a code sketch, and predict what it changes at the mechanism level — coverage of subgoals,
-per-part context size, the shape of token growth, where the final answer is assembled —
-alongside the expected movement on score and tokens."""
+A cooperative organization — a swarm — is a set of parts, each with its own context, role and
+budget, connected by explicit flows of information: the task enters, the parts carry the work,
+and everything converges into one delivered answer. The organization decides what each part
+sees, what it is responsible for, and how its output reaches the rest.
+Study this task's anatomy — the instructions, and trajectories of how the work actually
+unfolds — and design the organization that fits it. Any topology the representation can
+express is yours. Deliver ONE organizational design with a code sketch, and predict what it
+changes at the mechanism level — each part's own subgoal, its context size, where the final
+answer is assembled — alongside the expected movement on score and tokens."""
 
 LEAD_PROMPT = """You are the optimizer of {subject}.
 Your job this round: push the Pareto frontier for the target domain on two axes — score up,
@@ -102,8 +96,9 @@ real a win as one that scores higher.
 {evidence_text}
 
 TWO PROPOSALS are at proposals/repair_proposal.md and proposals/design_proposal.md, written by
-proposers who each saw only their own mandate: one repairs what the evidence shows going wrong,
-one designs the organization from the structure of the task. A missing file means that proposer
+proposers who each saw only their own mandate: one refines the current organization with its
+shape held fixed (score up, tokens down), one designs the organization itself from the
+anatomy of the task. A missing file means that proposer
 died; proceed with what exists. They are evidence and argument, not orders. You ship ONE
 candidate this round, and it is yours: adopt one, combine them where they compose cleanly, take
 a mechanism from one and drop its integration, or reject both and do something the evidence
@@ -154,7 +149,8 @@ def run_codex(prompt: str, cwd: Path, prefix: Path, model: str, timeout: int) ->
     t0 = time.time()
     try:
         proc = subprocess.run(
-            ["codex", "exec", "-m", model, "-s", "workspace-write", "--skip-git-repo-check",
+            ["codex", "exec", "-m", model, "-c", 'model_reasoning_effort="xhigh"',
+             "-s", "workspace-write", "--skip-git-repo-check",
              "--color", "never", "-o", str(out_file), "-"],
             input=prompt, capture_output=True, text=True, timeout=timeout, cwd=cwd,
         )
@@ -183,7 +179,8 @@ def run_trio(workspace: Path, iter_dir: Path, spec: ArmSpec, model: str,
         out_file = _artifact(prefix, "out.md")
         stderr_file = _artifact(prefix, "stderr.txt").open("w")
         procs[axis] = (subprocess.Popen(
-            ["codex", "exec", "-m", model, "-s", "workspace-write", "--skip-git-repo-check",
+            ["codex", "exec", "-m", model, "-c", 'model_reasoning_effort="xhigh"',
+             "-s", "workspace-write", "--skip-git-repo-check",
              "--color", "never", "-o", str(out_file), "-"],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_file, text=True,
             cwd=workspace,
