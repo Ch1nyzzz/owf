@@ -90,12 +90,8 @@ def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled:
         "actually produced against what was required.\n"
     ) if gold.exists() else ""
     stalled_line = (
-        f"The frontier has not moved in the last {stalled} rounds. That is evidence about the design "
-        "neighborhood, not only about the individual edits: refinements of the incumbent shape have "
-        "stopped clearing the bar, so weigh whether the next gain lives at the design level — "
-        "decomposition, topology, node roles, handoffs, budget split — and what the failure evidence "
-        "says such a redesign should look like. Every earlier candidate sits under agents/ with its "
-        "eval report, so designs already tried are a read away.\n"
+        f"The frontier has not moved in the last {stalled} rounds — refinement has stopped paying; "
+        f"weigh a redesign.\n"
     ) if stalled >= EXPLORE_HINT_ROUNDS else ""
     return (
         f"Optimization round {it} for domain '{domain}'. Working directory: {run_root} (the run root).\n\n"

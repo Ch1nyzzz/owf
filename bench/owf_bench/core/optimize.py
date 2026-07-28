@@ -183,12 +183,8 @@ def build_gold_line(opt_root: Path) -> str:
 def build_stalled_line(state: dict) -> str:
     stalled = stalled_rounds(state["history"])
     return (
-        f"The frontier has not moved in the last {stalled} rounds. That is evidence about the design "
-        f"neighborhood, not only about the individual edits: refinements of the incumbent shape have "
-        f"stopped clearing the bar, so weigh whether the next gain lives at the design level — "
-        f"decomposition, topology, node roles, handoffs, budget split — and what the failure evidence "
-        f"says such a redesign should look like. Every earlier candidate sits under iter_*/ with its "
-        f"eval report, so designs already tried are a read away.\n"
+        f"The frontier has not moved in the last {stalled} rounds — refinement has stopped paying; "
+        f"weigh a redesign.\n"
     ) if stalled >= EXPLORE_HINT_ROUNDS else ""
 
 
