@@ -6,11 +6,11 @@ pending_eval.json with hypothesis/prediction on record, frontier_val.json +
 evolution_summary.jsonl as cross-iteration memory, import gate before
 evaluation.
 
-Optimizer organization: the SAME codex trio as the main arm (core/codex_trio.py
-— two axis-split proposers in parallel, one lead). The organization is a
-controlled variable of the arm comparison; the arms differ ONLY in the
-representation of the evolvable object (free JS module here, workflow DSL
-there). Substrate is likewise shared: candidates run through run-meta.ts on the
+Optimizer organization: the SAME single codex session per iteration as the
+main arm (core/codex_solo.py) — which is also the original meta-harness
+loop's shape. The organization is a controlled variable of the arm
+comparison; the arms differ ONLY in the representation of the evolvable
+object (free JS module here, workflow DSL there). Substrate is likewise shared: candidates run through run-meta.ts on the
 executor's frozen stack, and iteration 0 is the canonical seed measurement.
 
 Candidate runtime has no sandbox (free-code evolution is the point), so the
@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = ROOT / "executor"
 SEED_DIR = Path(__file__).resolve().parent / "agents_seed"
 
-from owf_bench.core.codex_trio import ArmSpec, run_trio  # noqa: E402
+from owf_bench.core.codex_solo import ArmSpec, run_solo  # noqa: E402
 from owf_bench.core.optimize import EXPLORE_HINT_ROUNDS, update_frontier, write_train_gold  # noqa: E402
 
 DOMAIN_TOOLS = {"realmath": "['python']", "bcplus": "['search', 'open_doc']"}
@@ -231,7 +231,7 @@ def main() -> None:
                                         meta_stalled_rounds(summary_path)),
             candidate_path=Path(f"{agents_dir}/<candidate_name>.mjs (a NEW file; you choose the name)"),
             validate_cmd=f"cd {EXECUTOR} && npx tsx src/run-meta.ts --validate-agent <your file>",
-            lead_extra=(
+            extra=(
                 f"- Also write exactly {pending}:\n"
                 '  {"iteration": N, "candidates": [{"name": "<snake_case_name>", '
                 '"agent_file": "agents/<candidate_name>.mjs", "hypothesis": "<falsifiable claim '
@@ -241,12 +241,12 @@ def main() -> None:
             ),
         )
         t0 = time.time()
-        sessions = run_trio(run_root, iter_dir, spec, args.proposer_model,
-                            lead_timeout=args.lead_timeout)
+        sessions = run_solo(run_root, iter_dir, spec, args.proposer_model,
+                            timeout=args.lead_timeout)
         row: dict = {"iteration": it, "sessions": sessions,
                      "proposer_sec": round(time.time() - t0)}
 
-        # Append-only gate: a trio that edited history invalidates the iteration.
+        # Append-only gate: a session that edited history invalidates the iteration.
         tampered = [n for n, h in before.items()
                     if not (agents_dir / n).exists()
                     or hashlib.sha1((agents_dir / n).read_bytes()).hexdigest() != h]

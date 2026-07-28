@@ -266,7 +266,7 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
         "Evidence layout: evidence/stability.json (per-task stability); evidence/baseline/ — the canonical "
         "seed rollouts (one dir per task: journal.jsonl + full per-node transcripts); iter_*/eval/ — every "
         "prior candidate's evaluation (results.jsonl, report.json, one rollout dir per task); "
-        "iter_*/proposals/ and iter_*/lead.out.md — prior rounds' deliberation; state.json — round history; "
+        "iter_*/optimizer.out.md — prior rounds' deliberation; state.json — round history; "
         "NOTES.md — cross-round memory.\n"
         "Parent choice is YOURS: any frontier point or any earlier candidate (iter_*/candidate.js, each with "
         "its eval report) — rejected candidates often contain good ideas that did not clear the bar alone."
@@ -275,8 +275,8 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
 
 def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir: Path,
                     opt_model: str, lead_timeout: int) -> tuple[Path, dict]:
-    """One optimization round on the codex trio (shared organization with the meta-harness arm)."""
-    from owf_bench.core.codex_trio import ArmSpec, run_trio
+    """One optimization round: a single codex session (shared shape with the meta-harness arm)."""
+    from owf_bench.core.codex_solo import ArmSpec, run_solo
 
     candidate = iter_dir / "candidate.js"
     spec = ArmSpec(
@@ -285,16 +285,16 @@ def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir:
         evidence_text=codex_evidence_text(opt_root, domain, it, state),
         candidate_path=candidate,
         validate_cmd=f"cd {EXECUTOR} && npx tsx src/run.ts --validate-only {candidate}",
-        lead_extra=(
+        extra=(
             f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "hypothesis": str, '
-            f'"predictions": str, "proposals_used": str, "summary": str}}.'
+            f'"predictions": str, "summary": str}}.'
         ),
     )
     t0 = time.time()
-    sessions = run_trio(opt_root, iter_dir, spec, opt_model, lead_timeout=lead_timeout)
+    sessions = run_solo(opt_root, iter_dir, spec, opt_model, timeout=lead_timeout)
     rec: dict = {
         "iter": it,
-        "optimizer_status": "ok" if sessions["lead"]["rc"] == 0 else "codex_error",
+        "optimizer_status": "ok" if sessions["optimizer"]["rc"] == 0 else "codex_error",
         "optimizer_sec": round(time.time() - t0),
         "sessions": sessions,
         "candidate_made": candidate.exists(),
