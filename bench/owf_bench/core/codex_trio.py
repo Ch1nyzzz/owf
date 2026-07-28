@@ -118,9 +118,6 @@ How to work:
 - Organization is the search space: how work is decomposed, who does what, what flows between
   parts, where results are verified and rescued. Explore organizational designs as freely as
   prompt wording — the explicit program representation exists to make cooperation designable.
-  Splitting work across isolated parts often spends no more tokens than one long context, and
-  whatever a structure does spend, the frontier's token axis prices it: the measurement
-  decides, not a prior.
 - Before writing, put in NOTES.md: the failure pattern you target (cite tasks/journals), your
   hypothesis, and a concrete prediction (which tasks should flip, expected token change).
   NOTES.md is your only memory across rounds; you will re-read it cold next round. Curate it:
