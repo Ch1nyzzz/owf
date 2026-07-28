@@ -52,38 +52,47 @@ beats skimming everything. Once the evidence supports one mechanism, stop readin
 Write EXACTLY one file: {proposal_path}
 Markdown with sections:
 - PARENT: which frontier point / earlier candidate you build on, and why
-- DIAGNOSIS: the failure or waste pattern, with task ids and journal paths
-- MECHANISM: the concrete change
+- GROUNDING: what the proposal rests on — the failure or waste pattern (task ids, journal
+  paths), or the task-structure analysis the design follows from
+- MECHANISM: the concrete change or organizational design
 - CODE SKETCH: the fragment that implements it — enough for the lead to integrate verbatim
-- EXPECTED: predicted score and token effect, and which tasks should move
+- EXPECTED: predicted score and token effect; for organizational designs, also the
+  mechanism-level observables that would confirm the design (subgoal coverage, per-part
+  context size, where the answer is assembled)
 - RISK: what this could break, and what evidence would disconfirm it
 
-Propose ONE mechanism, the one your evidence supports best — not a menu.
+Propose ONE mechanism, the one your grounding supports best — not a menu.
 Modify no other file.
 
-YOUR AXIS THIS ROUND:
+YOUR MANDATE THIS ROUND:
 {axis_brief}
 """
 
-SCORE_BRIEF = """RAISE THE SCORE. You own the accuracy axis and nothing else.
-Start from the highest-scoring frontier point unless the evidence argues for another parent.
-Find tasks that are failing and could be made to pass: read what the rollouts actually answered
-and why it was wrong or absent. Check whether a usable result already appeared somewhere in the
-trajectory and was lost on the way to the final answer — repairing that path is a different fix
-from making a node redo the work, and usually a cheaper one. Then propose the structure, prompt,
-routing or rail that would fix that failure MODE on unseen tasks of the same kind.
-Extra tokens are allowed when they buy accuracy, but say what they buy: name the mechanism the
-spend funds. Do NOT propose a change whose main effect is saving tokens — that is the other
-proposer's job, and a round where both of you optimise cost is a wasted round."""
+REPAIR_BRIEF = """REPAIR. You own the evidence of what actually happened.
+Start from the frontier point the evidence argues for. Read the failed rollouts: what was asked,
+what the trajectory produced, and what reached the final answer. Check whether a usable result
+already appeared somewhere in the trajectory and was lost on the way out — repairing that path
+is a different fix from making a part redo the work, and usually a cheaper one. Waste is a
+failure too: turns that repeat themselves, context handed to a step that does not need it,
+retries that never change the answer. Then propose the change that repairs that failure MODE on
+unseen tasks of the same kind — prompt, structure, routing, rail, or budget placement — and
+predict which tasks should flip and the token effect."""
 
-TOKEN_BRIEF = """CUT THE TOKENS AT UNCHANGED SCORE. You own the cost axis and nothing else.
-Start from the leanest frontier point unless the evidence argues for another parent.
-Find waste, not work: turns that repeat themselves, output nobody reads, context handed to a
-step that does not need it, retries that never change the answer, verbose instructions that buy
-nothing. Read the journals to distinguish a turn that changed the outcome from a turn that
-merely happened. The score must hold. A change that saves tokens by giving up answers is a
-regression, not a win — if your mechanism risks losing a correct answer, say so in RISK and
-explain why the evidence says it will not."""
+DESIGN_BRIEF = """DESIGN. You own the organization.
+Start from the structure of the task itself and design the workflow / swarm organization that
+fits it. Read the task instructions and a few trajectories to understand the anatomy of the
+work, then ask:
+- which subgoals are independent, and can be covered by separate parts with their own contexts;
+- where context grows as work proceeds, and what isolation keeps each part's context small;
+- where diverse parallel attempts explore better than one long attempt, and how their results
+  get adjudicated;
+- how partial results flow into the final answer without loss — deterministic assembly where
+  the logic is mechanical, a dedicated part where it is semantic;
+- how the per-task budget is best allocated across the parts.
+Any topology the representation can express is yours to use. Deliver ONE organizational design
+with a code sketch, and predict what it changes at the mechanism level — coverage of subgoals,
+per-part context size, the shape of token growth, where the final answer is assembled —
+alongside the expected movement on score and tokens."""
 
 LEAD_PROMPT = """You are the optimizer of {subject}.
 Your job this round: push the Pareto frontier for the target domain on two axes — score up,
@@ -92,14 +101,16 @@ real a win as one that scores higher.
 
 {evidence_text}
 
-TWO PROPOSALS are at proposals/score_proposal.md and proposals/token_proposal.md, one per axis,
-written by proposers who each saw only their own mandate. A missing file means that proposer
+TWO PROPOSALS are at proposals/repair_proposal.md and proposals/design_proposal.md, written by
+proposers who each saw only their own mandate: one repairs what the evidence shows going wrong,
+one designs the organization from the structure of the task. A missing file means that proposer
 died; proceed with what exists. They are evidence and argument, not orders. You ship ONE
 candidate this round, and it is yours: adopt one, combine them where they compose cleanly, take
 a mechanism from one and drop its integration, or reject both and do something the evidence
-supports better. Verify their citations with targeted reads before you build on them. Two
-mechanisms that both touch the same part usually conflict; prefer shipping one cleanly over
-merging both badly.
+supports better. Verify a repair's citations with targeted reads before you build on it; judge
+a design by its mechanism-level predictions — after evaluation, whether each part achieved its
+own subgoal is a separate question from the total score, and a design whose mechanism works but
+whose integration is rough is a parent worth refining, not a dead end.
 
 {rep_contract}
 
@@ -162,8 +173,8 @@ def run_trio(workspace: Path, iter_dir: Path, spec: ArmSpec, model: str,
 
     sessions = {}
     procs = {}
-    for axis, brief in (("score", SCORE_BRIEF), ("tokens", TOKEN_BRIEF)):
-        proposal_path = proposals_dir / f"{'score' if axis == 'score' else 'token'}_proposal.md"
+    for axis, brief in (("repair", REPAIR_BRIEF), ("design", DESIGN_BRIEF)):
+        proposal_path = proposals_dir / f"{axis}_proposal.md"
         prompt = PROPOSER_COMMON.format(subject=spec.subject, evidence_text=spec.evidence_text,
                                         rep_contract=spec.rep_contract,
                                         proposal_path=proposal_path, axis_brief=brief)
