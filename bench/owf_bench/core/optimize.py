@@ -249,6 +249,10 @@ WORKFLOW_REP_CONTRACT = """THE REPRESENTATION — a workflow.js orchestration pr
 def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> str:
     frontier = state["frontier"]
     band = state.get("noise_band", 0.04)
+    first_round_line = (
+        "This is the first round: ship a REDESIGN — design the organization for this task from "
+        "its anatomy. Refinement has its turn once there is a designed organization to refine.\n"
+    ) if not state["history"] else ""
     return (
         f"Optimization round {it} for domain '{domain}'. Working directory: {opt_root} (the optimization root).\n\n"
         f"CURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, tokens down):\n"
@@ -258,6 +262,7 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
         f"applied. For context on how much scores wobble, the baseline measured a ±{band} run-to-run band "
         "across k repeats (evidence/stability.json). Tokens are input+output per task.\n"
         f"{build_gold_line(opt_root)}"
+        f"{first_round_line}"
         f"{build_stalled_line(state)}"
         "Evidence layout: evidence/stability.json (per-task stability); evidence/baseline/ — the canonical "
         "seed rollouts (one dir per task: journal.jsonl + full per-node transcripts); iter_*/eval/ — every "

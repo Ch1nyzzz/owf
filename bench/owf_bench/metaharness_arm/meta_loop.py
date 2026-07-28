@@ -79,7 +79,8 @@ def rep_contract(domain: str, agents_dir: Path) -> str:
   sanctioned gold channel."""
 
 
-def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled: int) -> str:
+def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled: int,
+                  first_round: bool = False) -> str:
     pareto_lines = "\n".join(
         f"  - {p['name']}: score {p['score']:.4f}, {p['tokens']:,} tokens/task (report: {p['report']})"
         for p in frontier.get("pareto", [])
@@ -93,6 +94,10 @@ def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled:
         f"The frontier has not moved in the last {stalled} rounds — refinement has stopped paying; "
         f"weigh a redesign.\n"
     ) if stalled >= EXPLORE_HINT_ROUNDS else ""
+    first_round_line = (
+        "This is the first round: ship a REDESIGN — design the organization for this task from "
+        "its anatomy. Refinement has its turn once there is a designed organization to refine.\n"
+    ) if first_round else ""
     return (
         f"Optimization round {it} for domain '{domain}'. Working directory: {run_root} (the run root).\n\n"
         f"CURRENT PARETO FRONTIER on (score up, tokens down):\n{pareto_lines}\n"
@@ -100,6 +105,7 @@ def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled:
         "fewer tokens, without being worse on the other axis. Admission is exact. Tokens are input+output "
         "per task.\n"
         f"{gold_line}"
+        f"{first_round_line}"
         f"{stalled_line}"
         "Evidence layout: evolution_summary.jsonl — every prior candidate: hypothesis, changes, score, "
         "tokens, statuses; read it first and do not re-test a refuted hypothesis. frontier_val.json — "
@@ -224,7 +230,8 @@ def main() -> None:
             subject="a free-form agent program (a plain-JS agent module)",
             rep_contract=rep_contract(args.domain, agents_dir),
             evidence_text=evidence_text(run_root, args.domain, it, frontier,
-                                        meta_stalled_rounds(summary_path)),
+                                        meta_stalled_rounds(summary_path),
+                                        first_round=(it == done and done == 0)),
             candidate_path=Path(f"{agents_dir}/<candidate_name>.mjs (a NEW file; you choose the name)"),
             validate_cmd=f"cd {EXECUTOR} && npx tsx src/run-meta.ts --validate-agent <your file>",
             extra=(
