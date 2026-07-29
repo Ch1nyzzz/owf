@@ -25,7 +25,8 @@ def entry(member, samples):
     return make_entry(member, f"{member}.js", samples)
 
 
-def write_source(source_dir: Path, workflow: str, rows: dict[str, list[tuple[float, int]]]) -> None:
+def write_source(source_dir: Path, workflow: str, rows: dict[str, list[tuple[float, int]]],
+                 match_type: str = "judge") -> None:
     """rows: task_id -> [(score, tokens), ...] one tuple per rep."""
     source_dir.mkdir(parents=True, exist_ok=True)
     lines = []
@@ -33,6 +34,7 @@ def write_source(source_dir: Path, workflow: str, rows: dict[str, list[tuple[flo
         for rep, (score, tokens) in enumerate(reps):
             lines.append(json.dumps({
                 "task_id": tid, "rep": rep, "status": "ok", "score": score,
+                "match_type": match_type,
                 "tokens": {"input": tokens, "output": 0},
             }))
     (source_dir / "results.jsonl").write_text("\n".join(lines) + "\n")
@@ -151,6 +153,26 @@ class TestBuildBook(unittest.TestCase):
     def test_rebuild_is_idempotent(self):
         root = self.make_root()
         self.assertEqual(build_book(root), build_book(root))
+
+    def test_judge_error_rows_are_not_evidence(self):
+        # A dead judge scores everything 0 with match_type judge_error; those reps
+        # must neither create entries nor drag down an existing owner's pass rate.
+        root = self.make_root()
+        before = build_book(root)
+        write_source(root / "confirm/seed", "seed.js",
+                     {"t1": [(0.0, 100), (0.0, 100)]}, match_type="judge_error")
+        after = build_book(root)
+        self.assertEqual(after["tasks"]["t1"]["entries"]["seed"],
+                         before["tasks"]["t1"]["entries"]["seed"])
+        self.assertEqual(after["tasks"]["t1"]["owner"], "seed")
+
+    def test_member_with_only_judge_error_rows_has_no_entry(self):
+        root = self.make_root()
+        write_source(root / "iter_004/eval", "i4.js",
+                     {"t3": [(0.0, 50)]}, match_type="judge_error")
+        book = build_book(root)
+        self.assertNotIn("iter_004", book["tasks"].get("t3", {}).get("entries", {}))
+        self.assertIn("t3", book["coverage"]["unsolved"])
 
 
 if __name__ == "__main__":

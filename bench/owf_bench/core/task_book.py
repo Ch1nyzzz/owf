@@ -42,7 +42,14 @@ STATUS_RANK = {"confirmed": 2, "provisional": 1, "fail": 0}
 
 
 def collect_samples(source_dir: Path) -> dict[str, list[dict]]:
-    """Graded (score, tokens, rollout) samples per task from one runner output dir."""
+    """Graded (score, tokens, rollout) samples per task from one runner output dir.
+
+    judge_error rows are NOT evidence: the judge never delivered a verdict, so the
+    rep says nothing about the member. Counting them as failures let a dead judge
+    (2026-07-29: official-API balance exhausted, every call 402) drag pass rates
+    down and churn 40 task ownerships on garbage. Infra errors are excluded for
+    the same reason.
+    """
     results = source_dir / "results.jsonl"
     if not results.exists():
         return {}
@@ -51,6 +58,8 @@ def collect_samples(source_dir: Path) -> dict[str, list[dict]]:
         if not line.strip():
             continue
         r = json.loads(line)
+        if r.get("match_type") == "judge_error" or r.get("status") == "infra_error":
+            continue
         tokens = r.get("tokens") or {}
         samples.setdefault(r["task_id"], []).append({
             "score": r["score"],
