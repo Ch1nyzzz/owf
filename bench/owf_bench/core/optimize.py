@@ -276,6 +276,118 @@ WORKFLOW_REP_CONTRACT = """THE REPRESENTATION — a workflow.js orchestration pr
 - Hard boundary: no new side-effect channels (raw network/fs/process), no information sources outside the benchmark rules, no bypassing token accounting. The repo's data/ directory is OFF-LIMITS — held-out gold lives there; evidence/train_gold.json is the only sanctioned gold channel."""
 
 
+SLOT_VOCAB_V1 = {
+    "research_prompt": "system prompt of the investigator node",
+    "decoding": "temperature / thinking settings",
+    "turn_budget": "maxTurns of the investigator",
+    "cutoff_rail": "hard research deadline (onTurn inject + preToolUse block)",
+    "closure": "converts a deadline-hitting run into an answer",
+    "output_contract": "how the answer leaves the workflow",
+    "verifier": "optional post-hoc answer checks",
+    "monitor_rail": "mid-run trajectory monitors",
+    "topology": "node structure of the workflow",
+}
+
+MANIFEST_CONTRACT = """
+DECLARATION PROTOCOL (contract-native search; docs/CONTRACTS.md). Anonymous landing is
+forbidden: summary.json MUST also carry a "manifest" declaring what the candidate is made of:
+  "manifest": {
+    "action": "NEW_COMPONENT" | "NEW_ASSEMBLY" | "NEW_SLOT",
+    "components": {"<slot>.<name>": {"slot": "<slot>", "desc": "<one line>", "params": {...}}, ...},
+    "new_slots": {"<slot>": "<one line>"}        // only with action NEW_SLOT
+  }
+"components" lists EVERY component the candidate carries. Reuse an existing inventory id
+verbatim for anything kept from a parent; declare a NEW id whenever prompt text or logic
+changes (a param-only change reuses the id with different params). Actions:
+  NEW_ASSEMBLY  — recombination / param change of EXISTING inventory components only.
+  NEW_COMPONENT — introduces new component id(s) into existing slots.
+  NEW_SLOT      — grows the slot vocabulary itself; ship the new slot(s) plus their first component(s).
+Slot vocabulary: research_prompt, decoding, turn_budget, cutoff_rail, closure, output_contract,
+verifier, monitor_rail, topology. The live inventory (ids, slots, who carries what) is at
+<opt_root>/lab/components.json. An invalid or missing manifest voids the round."""
+
+MANIFEST_ID_RE = r"^[a-z][a-z0-9_]*\.[a-z0-9_]+$"
+
+
+def validate_manifest(manifest: object, inventory: dict) -> list[str]:
+    import re
+    if not isinstance(manifest, dict):
+        return ["manifest missing or not an object"]
+    errors = []
+    action = manifest.get("action")
+    if action not in ("NEW_COMPONENT", "NEW_ASSEMBLY", "NEW_SLOT"):
+        errors.append(f"unknown action: {action}")
+    comps = manifest.get("components")
+    if not isinstance(comps, dict) or not comps:
+        return errors + ["components must be a non-empty object"]
+    new_slots = manifest.get("new_slots") or {}
+    known_slots = set(inventory.get("slots", {})) | set(new_slots)
+    known_ids = set(inventory.get("components", {}))
+    fresh = [cid for cid in comps if cid not in known_ids]
+    for cid, spec in comps.items():
+        if not re.match(MANIFEST_ID_RE, cid):
+            errors.append(f"bad component id: {cid}")
+        if not isinstance(spec, dict) or spec.get("slot") not in known_slots:
+            errors.append(f"{cid}: unknown or missing slot {spec.get('slot') if isinstance(spec, dict) else spec}")
+        elif cid in fresh and not (spec.get("desc") or "").strip():
+            errors.append(f"{cid}: new component needs a desc")
+    if action == "NEW_ASSEMBLY" and fresh:
+        errors.append(f"NEW_ASSEMBLY may not introduce components: {fresh}")
+    if action == "NEW_COMPONENT" and not fresh:
+        errors.append("NEW_COMPONENT declared but every component already exists")
+    if action == "NEW_SLOT" and not new_slots:
+        errors.append("NEW_SLOT requires new_slots")
+    return errors
+
+
+def apply_manifest(inventory: dict, member: str, manifest: dict) -> None:
+    """Record a validated manifest: inventory rows grow, never rewrite history."""
+    for slot, desc in (manifest.get("new_slots") or {}).items():
+        inventory.setdefault("slots", {}).setdefault(slot, str(desc))
+    params: dict = {}
+    for cid, spec in manifest["components"].items():
+        inventory.setdefault("components", {}).setdefault(cid, {"slot": spec["slot"], "desc": spec.get("desc", "")})
+        if spec.get("params"):
+            params[cid] = spec["params"]
+    inventory.setdefault("members", {})[member] = {cid: 1 for cid in manifest["components"]}
+    if params:
+        inventory.setdefault("params", {})[member] = params
+    inventory.setdefault("manifest_log", []).append({"member": member, "action": manifest["action"]})
+
+
+def init_inventory(opt_root: Path) -> Path:
+    """v9 starts from the seed alone: slot vocabulary + the seed's own manifest, no imports."""
+    path = opt_root / "lab/components.json"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "slots": SLOT_VOCAB_V1,
+            "components": {"prompt.seed_persistent": {
+                "slot": "research_prompt",
+                "desc": "seed's persistent-researcher prompt: vary keywords, reformulate, commit before turns run out"}},
+            "members": {"seed": {"prompt.seed_persistent": 1}},
+            "params": {"seed": {"prompt.seed_persistent": {"turn_budget": 64}}},
+            "manifest_log": [{"member": "seed", "action": "SEED"}],
+        }, indent=1))
+    return path
+
+
+def build_inventory_block(opt_root: Path) -> str:
+    path = opt_root / "lab/components.json"
+    if not path.exists():
+        return ""
+    inv = json.loads(path.read_text())
+    by_slot: dict[str, list[str]] = {}
+    for cid, spec in inv.get("components", {}).items():
+        carriers = sum(1 for comps in inv.get("members", {}).values() if comps.get(cid))
+        by_slot.setdefault(spec.get("slot", "?"), []).append(f"{cid} (x{carriers})")
+    lines = [f"  {slot}: {', '.join(sorted(ids))}" for slot, ids in sorted(by_slot.items())]
+    return (
+        f"\nCOMPONENT INVENTORY ({path}) — ids by slot (x carriers). Reuse ids verbatim; "
+        f"a NEW_ASSEMBLY of untested combinations is a legitimate, cheap round:\n" + "\n".join(lines) + "\n"
+    )
+
+
 def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> str:
     # Deliberately unsteered (arm parity with meta_loop.py): no first-round redesign mandate,
     # no stalled-frontier hint, no refuted-hypothesis rule. The arms' prompts differ only by
@@ -299,6 +411,7 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
         "fewer tokens, without being worse on the other axis. Admission is exact — no noise tolerance is "
         f"applied. {band_line}Tokens are input+output per task.\n"
         f"{build_coverage_block(opt_root)}"
+        f"{build_inventory_block(opt_root)}"
         f"{build_gold_line(opt_root)}"
         "Evidence layout: evidence/stability.json (per-task stability); evidence/baseline/ — the canonical "
         "seed rollouts (one dir per task: journal.jsonl + full per-node transcripts); iter_*/eval/ — every "
@@ -309,7 +422,7 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
 
 
 def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir: Path,
-                    opt_model: str, lead_timeout: int) -> tuple[Path, dict]:
+                    opt_model: str, lead_timeout: int, contract_native: bool = False) -> tuple[Path, dict]:
     """One optimization round: a single codex session (protocol shared with the meta-harness arm).
 
     The only prompt-level difference from the baseline arm is ORIENTATION_SWARM — the
@@ -319,16 +432,20 @@ def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir:
     from owf_bench.core.codex_solo import ORIENTATION_SWARM, ArmSpec, run_solo
 
     candidate = iter_dir / "candidate.js"
+    manifest_line = (
+        f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "summary": str, '
+        f'"manifest": {{...per the DECLARATION PROTOCOL...}}, "notes": str (optional)}}.'
+    ) if contract_native else (
+        f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "summary": str, '
+        f'"notes": str (optional)}}.'
+    )
     spec = ArmSpec(
         subject="an agent workflow (a workflow.js orchestration program)",
-        rep_contract=WORKFLOW_REP_CONTRACT,
+        rep_contract=WORKFLOW_REP_CONTRACT + (MANIFEST_CONTRACT if contract_native else ""),
         evidence_text=codex_evidence_text(opt_root, domain, it, state),
         candidate_path=candidate,
         validate_cmd=f"cd {EXECUTOR} && npx tsx src/run.ts --validate-only {candidate}",
-        extra=(
-            f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "summary": str, '
-            f'"notes": str (optional)}}.'
-        ),
+        extra=manifest_line,
         orientation=ORIENTATION_SWARM,
     )
     t0 = time.time()
@@ -487,6 +604,14 @@ def main() -> None:
     # "codex": the codex trio (2 proposers + lead), the organization shared with the
     # meta-harness arm — no probes, watchdog disabled (predicates logged only).
     p.add_argument("--proposer", choices=["workflow", "codex"], default="workflow")
+    # v9 protocol: contract-native search. Every candidate declares a manifest
+    # (action + component list); the inventory ledger grows natively instead of
+    # by post-hoc decomposition. Invalid manifest = no-candidate round.
+    p.add_argument("--contract-native", action="store_true")
+    # In-loop confirmation: tasks this round claimed/took over get this many extra
+    # reps immediately (confirm/round_NNN/), keeping the book confirmed-grade as it
+    # grows. 0 disables.
+    p.add_argument("--confirm-repeats", type=int, default=2)
     p.add_argument("--opt-max-tokens", type=int, default=2_000_000)
     p.add_argument("--opt-max-sec", type=int, default=5400)
     args = p.parse_args()
@@ -559,6 +684,9 @@ def main() -> None:
     if not (opt_root / "NOTES.md").exists():
         (opt_root / "NOTES.md").write_text("(empty — first round)\n")
 
+    if args.contract_native:
+        init_inventory(opt_root)
+
     # Round 1 must already see the coverage block, so the book exists before the loop.
     book_path = opt_root / "task_book.json"
     if not book_path.exists():
@@ -578,8 +706,16 @@ def main() -> None:
 
         if args.proposer == "codex":
             candidate, rec = run_codex_round(opt_root, args.domain, it, state, iter_dir,
-                                             args.opt_model, args.opt_max_sec)
+                                             args.opt_model, args.opt_max_sec, args.contract_native)
             made = rec["candidate_made"]
+            if made and args.contract_native:
+                inventory = json.loads((opt_root / "lab/components.json").read_text())
+                manifest = rec.get("result", {}).get("manifest") if isinstance(rec.get("result"), dict) else None
+                manifest_errors = validate_manifest(manifest, inventory)
+                if manifest_errors:
+                    rec.update({"candidate_made": False, "manifest_error": "; ".join(manifest_errors)[:500]})
+                    made = False
+                    print(f"  candidate VOIDED by declaration protocol: {manifest_errors[:2]}")
         else:
             task = opt_task_payload(opt_root, args.domain, it, state, args.opt_model, args.opt_thinking,
                                     args.eval_max_tokens, args.eval_max_sec)
@@ -635,6 +771,33 @@ def main() -> None:
                     print(f"  book: claimed {delta['claimed'] or '[]'}, "
                           f"took over {[d['task'] for d in delta['took_over']] or '[]'}, "
                           f"union {delta['union']}")
+
+                if args.contract_native and rec.get("candidate_made"):
+                    inventory = json.loads((opt_root / "lab/components.json").read_text())
+                    apply_manifest(inventory, f"iter_{it:03d}", rec["result"]["manifest"])
+                    (opt_root / "lab/components.json").write_text(json.dumps(inventory, indent=1, ensure_ascii=False))
+
+                # Winner's-curse control: a k=1 claim is provisional. Confirm this
+                # round's newly won tasks immediately so the book stays honest.
+                member = f"iter_{it:03d}"
+                won = delta["claimed"] + [d["task"] for d in delta["took_over"] if d["to"] == member]
+                if args.confirm_repeats > 0 and won:
+                    confirm_dir = task_book.next_confirm_round(opt_root) / member
+                    print(f"  confirming {len(won)} task(s) x {args.confirm_repeats} reps -> {confirm_dir.parent.name}")
+                    subprocess.run(
+                        ["python3", str(ROOT / "bench/owf_bench/core/runner.py"), "--domain", args.domain,
+                         "--workflow", str(candidate), "--subset", "train", "--task-ids", ",".join(sorted(won)),
+                         "--repeats", str(args.confirm_repeats), "--workers", str(min(len(won) * args.confirm_repeats, 16)),
+                         "--out", str(confirm_dir), "--max-tokens", str(args.eval_max_tokens),
+                         "--max-wallclock-sec", str(args.eval_max_sec)],
+                        cwd=ROOT, capture_output=True, text=True, timeout=14400,
+                        env={**__import__("os").environ, "PYTHONPATH": str(ROOT / "bench")},
+                    )
+                    book = task_book.build_book(opt_root)
+                    book_path.write_text(json.dumps(book, indent=1, ensure_ascii=False))
+                    cov = book["coverage"]
+                    rec["confirm"] = {"tasks": sorted(won), "confirmed_after": cov["confirmed"]}
+                    print(f"  confirmed coverage now {cov['confirmed']}/{cov['universe']}")
             else:
                 rec.update({"candidate_score": None, "entered_frontier": False, "eval_failed": True})
         best = best_by_score(state["frontier"])
