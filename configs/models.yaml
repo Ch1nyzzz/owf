@@ -17,9 +17,23 @@
 #   Optimizer/watchdog: gpt-5.6-terra via the Codex coding-plan subscription (OAuth, xhigh)
 models:
   deepseek-v4-flash:
-    # The sole SUT model. Stays on gpugeek: it has never rate-limited us. Its `cached_tokens`
-    # reporting is unreliable (a cold call claimed 6656 hits; the warm repeat reported none),
-    # which is exactly why cache hits are billed at the full input rate rather than trusted.
+    # The sole SUT model. Back on gpugeek 2026-07-29 (user decision, service restored).
+    # History: moved to the official DeepSeek API 2026-07-28 when gpugeek's transport
+    # flakiness poisoned whole eval rounds (27/50 terminal timeouts in one bcplus round);
+    # returned the next day once gpugeek recovered. To fall back to the official API,
+    # set base_url https://api.deepseek.com, model_id deepseek-v4-flash and
+    # api_key_env DEEPSEEK_API_KEY (key already in .env). Cache hits stay billed at the
+    # full input rate — gpugeek's cached_tokens reporting is unreliable — so the token
+    # axis remains comparable across endpoint switches.
+    #
+    # Thinking rides the SERVER default on every SUT call: with reasoning: false, pi-ai's
+    # deepseek compat sends no thinking param at all. The official API verifiably defaults
+    # to thinking ENABLED (reasoning_content billed inside completion output); gpugeek's
+    # default is UNVERIFIED — check a journal for reasoning_content before comparing token
+    # counts across endpoints. Side effect: pi drops thinkingLevel opts for reasoning:false
+    # models, so candidates cannot toggle thinking per-node. Do NOT flip this to
+    # reasoning: true: pi would then send `thinking: {type: "disabled"}` on every call
+    # that lacks an explicit thinkingLevel, silently turning thinking off.
     sut: true
     base_url: ${SOLVER_BASE_URL:-https://api.gpugeek.com/v1}
     model_id: Vendor3/DeepSeek-V4-Flash
