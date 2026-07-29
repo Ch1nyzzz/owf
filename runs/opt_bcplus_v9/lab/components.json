@@ -1,0 +1,1009 @@
+{
+ "slots": {
+  "research_prompt": "system prompt of the investigator node",
+  "decoding": "temperature / thinking settings",
+  "turn_budget": "maxTurns of the investigator",
+  "cutoff_rail": "hard research deadline (onTurn inject + preToolUse block)",
+  "closure": "converts a deadline-hitting run into an answer",
+  "output_contract": "how the answer leaves the workflow",
+  "verifier": "optional post-hoc answer checks",
+  "monitor_rail": "mid-run trajectory monitors",
+  "topology": "node structure of the workflow"
+ },
+ "components": {
+  "prompt.seed_persistent": {
+   "slot": "research_prompt",
+   "desc": "seed's persistent-researcher prompt: vary keywords, reformulate, commit before turns run out"
+  },
+  "prompt.anchor_scout_v1": {
+   "slot": "research_prompt",
+   "desc": "High-information-anchor scout that produces an evidence memo rather than an unbounded answer attempt."
+  },
+  "prompt.reverse_chain_scout_v1": {
+   "slot": "research_prompt",
+   "desc": "Outcome-backwards scout that independently narrows candidates and records verification leads."
+  },
+  "prompt.exact_integrator_v1": {
+   "slot": "research_prompt",
+   "desc": "Lead investigator prompt that verifies scout evidence and returns canonical requested forms."
+  },
+  "decoding.deterministic_v1": {
+   "slot": "decoding",
+   "desc": "Deterministic deepseek-v4-flash decoding for all three roles."
+  },
+  "turn_budget.dual12_plus30_v1": {
+   "slot": "turn_budget",
+   "desc": "Two 16-turn scouts with a 12-turn research window and one 34-turn integrator with a 30-turn research window."
+  },
+  "cutoff.memo_then_commit_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Injects a memo/answer deadline and blocks late tool calls so each node can close with usable output."
+  },
+  "closure.schema_memo_and_answer_v1": {
+   "slot": "closure",
+   "desc": "Schema-enforced scout memos and a schema-enforced final answer prevent null returns at turn limits."
+  },
+  "output_contract.exact_answer_object_v1": {
+   "slot": "output_contract",
+   "desc": "Returns the integrator's exact answer string in the domain answer object."
+  },
+  "topology.parallel_scouts_then_integrator_v1": {
+   "slot": "topology",
+   "desc": "Two independent corpus scouts run in parallel, then a final verifier consumes both compact handoffs."
+  },
+  "prompt.hypothesis_lead_v1": {
+   "slot": "research_prompt",
+   "desc": "Constraint-driven lead investigator that tests a discriminating clue and emits a compact evidence memo."
+  },
+  "prompt.canonical_closer_v1": {
+   "slot": "research_prompt",
+   "desc": "Focused final verifier that resolves exact official, legal, birth-name, and numeric output forms from the lead memo."
+  },
+  "turn_budget.lead44_plus12_v1": {
+   "slot": "turn_budget",
+   "desc": "One 48-turn lead with a 44-turn tool window followed by a 16-turn closer with a 12-turn tool window."
+  },
+  "cutoff.lead_memo_then_canonical_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Injects a late lead closure reminder and blocks further research before each schema handoff or final commit."
+  },
+  "topology.serial_lead_then_canonicalizer_v1": {
+   "slot": "topology",
+   "desc": "A single evidence lead hands one compact memo to a bounded canonical-answer closer."
+  },
+  "prompt.clue_cartographer_v1": {
+   "slot": "research_prompt",
+   "desc": "Tool-free planner that extracts compact literal search anchors and a hop-by-hop evidence map."
+  },
+  "prompt.chain_investigator_v1": {
+   "slot": "research_prompt",
+   "desc": "Constraint-led corpus investigator that pivots by rare phrases and distinguishes intermediates from targets."
+  },
+  "verifier.forensic_canonical_v1": {
+   "slot": "verifier",
+   "desc": "Focused final verifier that tests the remaining evidence link and canonicalizes names, titles, and values."
+  },
+  "turn_budget.plan4_chain34_close12_v1": {
+   "slot": "turn_budget",
+   "desc": "A four-turn tool-free plan, a 38-turn chain investigator with 34 research turns, and a 16-turn verifier with 12 research turns."
+  },
+  "cutoff.chain_audit_then_commit_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Closes research after explicit chain and verifier evidence windows so each agent submits structured output."
+  },
+  "monitor_rail.chain_evidence_audits_v1": {
+   "slot": "monitor_rail",
+   "desc": "Injects early pivot, target-vs-intermediate, and closure audits into the chain investigator."
+  },
+  "closure.plan_memo_answer_schemas_v1": {
+   "slot": "closure",
+   "desc": "Schema-enforced clue map, evidence memo, and exact answer preserve useful handoffs under deadlines."
+  },
+  "topology.serial_clue_map_chain_verifier_v1": {
+   "slot": "topology",
+   "desc": "A serial planner → evidence-chain investigator → forensic verifier organization with two compact handoffs."
+  },
+  "prompt.literal_anchor_retriever_v1": {
+   "slot": "research_prompt",
+   "desc": "Independent retriever that searches short rare clauses and traces source wording to the requested final field."
+  },
+  "prompt.relational_chain_resolver_v1": {
+   "slot": "research_prompt",
+   "desc": "Independent constraint-chain researcher that resolves the extra hop from intermediates to the requested answer."
+  },
+  "verifier.answer_obligation_v1": {
+   "slot": "verifier",
+   "desc": "Focused final verifier that rejects intermediate entities and checks the exact answer field, form, or calculation."
+  },
+  "turn_budget.dual16_26_close12_v1": {
+   "slot": "turn_budget",
+   "desc": "Two 20/30-turn evidence researchers converge into a 16-turn verifier, with late-turn submission reminders."
+  },
+  "monitor_rail.literal_chain_obligation_audits_v1": {
+   "slot": "monitor_rail",
+   "desc": "Injects retrieval-pivot, target-field, and required-schema-submission audits before each node closes."
+  },
+  "closure.dual_dossier_answer_schemas_v1": {
+   "slot": "closure",
+   "desc": "Schema-enforced dual evidence dossiers and exact answer preserve useful handoffs at deadlines."
+  },
+  "topology.parallel_evidence_then_obligation_v1": {
+   "slot": "topology",
+   "desc": "Literal and relational evidence specialists work independently in parallel, then converge in a final-field verifier."
+  },
+  "prompt.contrast_deadline_lead_v1": {
+   "slot": "research_prompt",
+   "desc": "Contradiction-first corpus investigator that tests the hardest clue before committing a compact free-text handoff."
+  },
+  "prompt.obligation_microcloser_v1": {
+   "slot": "research_prompt",
+   "desc": "Short final-field closer that performs only decisive canonicalization or calculation checks."
+  },
+  "turn_budget.lead22_close7_freeform_v1": {
+   "slot": "turn_budget",
+   "desc": "A 28-turn lead with a 22-turn research window and a 12-turn closer with a 7-turn verification window."
+  },
+  "cutoff.forced_transcript_commit_v1": {
+   "slot": "cutoff_rail",
+   "desc": "At each deadline, a nested tool-free editor converts the current transcript into a commitment and stops the search node before maxTurns can erase its handoff."
+  },
+  "closure.forced_transcript_final_marker_v1": {
+   "slot": "closure",
+   "desc": "Nested emergency editors emit a FINAL marker from the live transcript, with deterministic extraction after both deadlines."
+  },
+  "topology.serial_contrast_lead_microcloser_v1": {
+   "slot": "topology",
+   "desc": "A serial contrast-led investigator hands a compact evidence conclusion to a small final-field closer."
+  },
+  "prompt.evidence_lattice_planner_v1": {
+   "slot": "research_prompt",
+   "desc": "Tool-free planner that converts long questions into short clue-atom joins and candidate-to-field checks."
+  },
+  "prompt.evidence_lattice_investigator_v1": {
+   "slot": "research_prompt",
+   "desc": "Primary constrained-join investigator that records source-grounded candidates, aliases, and final-hop evidence."
+  },
+  "verifier.direct_answer_auditor_v1": {
+   "slot": "verifier",
+   "desc": "Final auditor that checks the output obligation, full-name expansion, formal titles, child fields, and report calculations."
+  },
+  "turn_budget.lattice4_invest38_audit14_v1": {
+   "slot": "turn_budget",
+   "desc": "A four-turn planner, 42-turn investigator with a 38-turn research window, and 16-turn direct auditor with a 14-turn tool window."
+  },
+  "cutoff.lattice_submit_deadlines_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Late submission reminders and hard tool cutoffs preserve a schema handoff and exact final answer."
+  },
+  "monitor_rail.lattice_join_audits_v1": {
+   "slot": "monitor_rail",
+   "desc": "Audits retrieval pivots, constraint joins, and canonical final-field checks during research."
+  },
+  "closure.lattice_three_schemas_v1": {
+   "slot": "closure",
+   "desc": "Schema-enforced plan, evidence dossier, and exact answer provide compact handoffs under bounded turns."
+  },
+  "topology.serial_lattice_plan_investigate_audit_v1": {
+   "slot": "topology",
+   "desc": "A serial clue-atom planner to constrained evidence investigator to direct-answer auditor organization."
+  },
+  "prompt.literal_evidence_prosecutor_v1": {
+   "slot": "research_prompt",
+   "desc": "Literal-anchor prosecutor builds a direct-source case file before an emergency commitment deadline."
+  },
+  "prompt.reverse_constraint_prosecutor_v1": {
+   "slot": "research_prompt",
+   "desc": "Output-backwards prosecutor verifies semantic direction and exact output forms in an independent case file."
+  },
+  "verifier.cross_examination_arbiter_v1": {
+   "slot": "verifier",
+   "desc": "Adversarial arbiter compares two source case files and checks only the decisive final obligation."
+  },
+  "turn_budget.dual18_casefile_plus11_verdict_v1": {
+   "slot": "turn_budget",
+   "desc": "Two 22-turn prosecutors each commit at turn 18, followed by a 14-turn arbiter committed at turn 11."
+  },
+  "cutoff.dual_forced_casefile_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Live-transcript case-file editors stop both prosecutors and the arbiter before late tool loops erase their conclusions."
+  },
+  "monitor_rail.casefile_cross_examination_audits_v1": {
+   "slot": "monitor_rail",
+   "desc": "Audits direct source support, final-field direction, and disagreement resolution during every stage."
+  },
+  "closure.forced_casefile_final_marker_v1": {
+   "slot": "closure",
+   "desc": "Tool-free editors turn live transcripts into compact case files and a deterministic FINAL-marker verdict."
+  },
+  "topology.parallel_casefiles_then_cross_examination_v1": {
+   "slot": "topology",
+   "desc": "Parallel literal and reverse-constraint prosecutors converge through a focused adversarial cross-examination verdict."
+  },
+  "prompt.anchor_ledger_discoverer_v1": {
+   "slot": "research_prompt",
+   "desc": "Source-first investigator prompt that records proven links and unresolved final hops in a compact evidence ledger."
+  },
+  "prompt.final_hop_resolver_v1": {
+   "slot": "research_prompt",
+   "desc": "Final-field resolver prompt that verifies the missing relational edge and renders the exact requested form."
+  },
+  "turn_budget.anchor30_resolve20_commit2_v1": {
+   "slot": "turn_budget",
+   "desc": "Thirty discovery turns and twenty resolution turns, each followed by a two-turn emergency commitment editor."
+  },
+  "monitor_rail.anchor_final_edge_audits_v1": {
+   "slot": "monitor_rail",
+   "desc": "Audits source-anchor quality, evidence-versus-unresolved edges, the final relation, and exact output rendering."
+  },
+  "topology.serial_anchor_ledger_forced_final_hop_v1": {
+   "slot": "topology",
+   "desc": "Serial source-anchor discovery and final-hop resolution, each protected by a tool-free commitment editor."
+  },
+  "prompt.hypothesis_divergence_lead_v1": {
+   "slot": "research_prompt",
+   "desc": "Constraint-divergence lead searches independent literal and inverse routes before emitting a compact evidence memo."
+  },
+  "prompt.canonical_recovery_closer_v1": {
+   "slot": "research_prompt",
+   "desc": "Focused closer rejects intermediate surface matches and resolves exact canonical output forms from a lead memo."
+  },
+  "turn_budget.lead44_recovery2_close12_v1": {
+   "slot": "turn_budget",
+   "desc": "A 48-turn lead with a 44-turn tool window, one two-turn recovery director, and a 16-turn closer with a 12-turn tool window."
+  },
+  "cutoff.divergence_memo_then_canonical_v1": {
+   "slot": "cutoff_rail",
+   "desc": "Closes the investigator after a rival-aware evidence audit and blocks late lookup loops before both schema commits."
+  },
+  "monitor_rail.transcript_recovery_director_v1": {
+   "slot": "monitor_rail",
+   "desc": "A tool-free director reads the live transcript and injects literal, inverse, and disconfirmation retrieval directions at the recovery checkpoint."
+  },
+  "topology.serial_lead_recovery_then_canonicalizer_v1": {
+   "slot": "topology",
+   "desc": "A serial lead investigator is steered by one embedded recovery director, then hands a compact memo to a final canonicalizer."
+  },
+  "prompt.literal_source_casefile_v1": {
+   "slot": "research_prompt",
+   "desc": "Literal-fingerprint investigator that builds a direct-source case file before a forced commitment."
+  },
+  "prompt.reverse_final_field_casefile_v1": {
+   "slot": "research_prompt",
+   "desc": "Independent output-backwards investigator that builds a final-relation case file before commitment."
+  },
+  "prompt.casefile_commit_editor_v1": {
+   "slot": "research_prompt",
+   "desc": "Tool-free editor that converts a live evidence transcript into an exact FINAL-marked commitment."
+  },
+  "verifier.casefile_obligation_arbiter_v1": {
+   "slot": "verifier",
+   "desc": "Final arbiter that reconciles divergent case files against the exact answer obligation."
+  },
+  "closure.compact_casefile_final_marker_v1": {
+   "slot": "closure",
+   "desc": "Final-marker extraction returns forced editor commitments when a structured arbiter cannot complete normally."
+  },
+  "topology.parallel_casefiles_then_obligation_v1": {
+   "slot": "topology",
+   "desc": "Parallel literal and output-backwards case files converge into a forced answer-obligation arbiter."
+  }
+ },
+ "members": {
+  "seed": {
+   "prompt.seed_persistent": 1
+  },
+  "iter_001": {
+   "prompt.anchor_scout_v1": 1,
+   "prompt.reverse_chain_scout_v1": 1,
+   "prompt.exact_integrator_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.dual12_plus30_v1": 1,
+   "cutoff.memo_then_commit_v1": 1,
+   "closure.schema_memo_and_answer_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.parallel_scouts_then_integrator_v1": 1
+  },
+  "iter_002": {
+   "prompt.hypothesis_lead_v1": 1,
+   "prompt.canonical_closer_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.lead44_plus12_v1": 1,
+   "cutoff.lead_memo_then_canonical_v1": 1,
+   "closure.schema_memo_and_answer_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.serial_lead_then_canonicalizer_v1": 1
+  },
+  "iter_003": {
+   "prompt.clue_cartographer_v1": 1,
+   "prompt.chain_investigator_v1": 1,
+   "verifier.forensic_canonical_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.plan4_chain34_close12_v1": 1,
+   "cutoff.chain_audit_then_commit_v1": 1,
+   "monitor_rail.chain_evidence_audits_v1": 1,
+   "closure.plan_memo_answer_schemas_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.serial_clue_map_chain_verifier_v1": 1
+  },
+  "iter_004": {
+   "prompt.literal_anchor_retriever_v1": 1,
+   "prompt.relational_chain_resolver_v1": 1,
+   "verifier.answer_obligation_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.dual16_26_close12_v1": 1,
+   "monitor_rail.literal_chain_obligation_audits_v1": 1,
+   "closure.dual_dossier_answer_schemas_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.parallel_evidence_then_obligation_v1": 1
+  },
+  "iter_005": {
+   "prompt.contrast_deadline_lead_v1": 1,
+   "prompt.obligation_microcloser_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.lead22_close7_freeform_v1": 1,
+   "cutoff.forced_transcript_commit_v1": 1,
+   "closure.forced_transcript_final_marker_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "verifier.answer_obligation_v1": 1,
+   "topology.serial_contrast_lead_microcloser_v1": 1
+  },
+  "iter_006": {
+   "prompt.evidence_lattice_planner_v1": 1,
+   "prompt.evidence_lattice_investigator_v1": 1,
+   "verifier.direct_answer_auditor_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.lattice4_invest38_audit14_v1": 1,
+   "cutoff.lattice_submit_deadlines_v1": 1,
+   "monitor_rail.lattice_join_audits_v1": 1,
+   "closure.lattice_three_schemas_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.serial_lattice_plan_investigate_audit_v1": 1
+  },
+  "iter_007": {
+   "prompt.literal_evidence_prosecutor_v1": 1,
+   "prompt.reverse_constraint_prosecutor_v1": 1,
+   "verifier.cross_examination_arbiter_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.dual18_casefile_plus11_verdict_v1": 1,
+   "cutoff.dual_forced_casefile_v1": 1,
+   "monitor_rail.casefile_cross_examination_audits_v1": 1,
+   "closure.forced_casefile_final_marker_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.parallel_casefiles_then_cross_examination_v1": 1
+  },
+  "iter_008": {
+   "prompt.anchor_ledger_discoverer_v1": 1,
+   "prompt.final_hop_resolver_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.anchor30_resolve20_commit2_v1": 1,
+   "cutoff.forced_transcript_commit_v1": 1,
+   "monitor_rail.anchor_final_edge_audits_v1": 1,
+   "closure.forced_transcript_final_marker_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.serial_anchor_ledger_forced_final_hop_v1": 1
+  },
+  "iter_009": {
+   "prompt.hypothesis_divergence_lead_v1": 1,
+   "prompt.canonical_recovery_closer_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.lead44_recovery2_close12_v1": 1,
+   "cutoff.divergence_memo_then_canonical_v1": 1,
+   "monitor_rail.transcript_recovery_director_v1": 1,
+   "closure.schema_memo_and_answer_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.serial_lead_recovery_then_canonicalizer_v1": 1
+  },
+  "iter_010": {
+   "prompt.literal_source_casefile_v1": 1,
+   "prompt.reverse_final_field_casefile_v1": 1,
+   "prompt.casefile_commit_editor_v1": 1,
+   "verifier.casefile_obligation_arbiter_v1": 1,
+   "decoding.deterministic_v1": 1,
+   "turn_budget.dual18_casefile_plus11_verdict_v1": 1,
+   "cutoff.dual_forced_casefile_v1": 1,
+   "monitor_rail.casefile_cross_examination_audits_v1": 1,
+   "closure.compact_casefile_final_marker_v1": 1,
+   "output_contract.exact_answer_object_v1": 1,
+   "topology.parallel_casefiles_then_obligation_v1": 1
+  }
+ },
+ "params": {
+  "seed": {
+   "prompt.seed_persistent": {
+    "turn_budget": 64
+   }
+  },
+  "iter_001": {
+   "prompt.anchor_scout_v1": {
+    "role": "anchor"
+   },
+   "prompt.reverse_chain_scout_v1": {
+    "role": "reverse_chain"
+   },
+   "prompt.exact_integrator_v1": {
+    "role": "integrator"
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.dual12_plus30_v1": {
+    "scout_maxTurns": 16,
+    "scout_tool_cutoff": 12,
+    "integrator_maxTurns": 34,
+    "integrator_tool_cutoff": 30
+   },
+   "cutoff.memo_then_commit_v1": {
+    "scout_inject_turn": 10,
+    "integrator_inject_turn": 28
+   },
+   "closure.schema_memo_and_answer_v1": {
+    "memo_fields": [
+     "candidates",
+     "findings",
+     "sources",
+     "next_step"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.parallel_scouts_then_integrator_v1": {
+    "scouts": 2,
+    "barriers": 1,
+    "final_nodes": 1
+   }
+  },
+  "iter_002": {
+   "prompt.hypothesis_lead_v1": {
+    "role": "lead",
+    "handoff": "schema_memo"
+   },
+   "prompt.canonical_closer_v1": {
+    "role": "canonical_closer",
+    "full_name_policy": "legal_name_only"
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.lead44_plus12_v1": {
+    "lead_maxTurns": 48,
+    "lead_tool_cutoff": 44,
+    "closer_maxTurns": 16,
+    "closer_tool_cutoff": 12
+   },
+   "cutoff.lead_memo_then_canonical_v1": {
+    "lead_inject_turn": 40,
+    "closer_inject_turn": 10
+   },
+   "closure.schema_memo_and_answer_v1": {
+    "memo_fields": [
+     "candidates",
+     "findings",
+     "sources",
+     "next_step"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.serial_lead_then_canonicalizer_v1": {
+    "lead_nodes": 1,
+    "handoff_barriers": 1,
+    "closer_nodes": 1
+   }
+  },
+  "iter_003": {
+   "prompt.clue_cartographer_v1": {
+    "role": "cartographer",
+    "max_turns": 4
+   },
+   "prompt.chain_investigator_v1": {
+    "role": "chain_investigator",
+    "handoff": "clue_map_to_memo"
+   },
+   "verifier.forensic_canonical_v1": {
+    "role": "forensic_verifier",
+    "tool_cutoff": 12
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.plan4_chain34_close12_v1": {
+    "planner_maxTurns": 4,
+    "chain_maxTurns": 38,
+    "chain_tool_cutoff": 34,
+    "verifier_maxTurns": 16,
+    "verifier_tool_cutoff": 12
+   },
+   "cutoff.chain_audit_then_commit_v1": {
+    "chain_tool_cutoff": 34,
+    "verifier_tool_cutoff": 12
+   },
+   "monitor_rail.chain_evidence_audits_v1": {
+    "chain_audits_at": [
+     12,
+     24,
+     30
+    ],
+    "verifier_audit_at": 9
+   },
+   "closure.plan_memo_answer_schemas_v1": {
+    "plan_fields": [
+     "requested_output",
+     "pivots",
+     "search_anchors",
+     "chain",
+     "final_check"
+    ],
+    "memo_fields": [
+     "candidates",
+     "findings",
+     "sources",
+     "next_step"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.serial_clue_map_chain_verifier_v1": {
+    "planner_nodes": 1,
+    "investigator_nodes": 1,
+    "verifier_nodes": 1,
+    "handoff_barriers": 2
+   }
+  },
+  "iter_004": {
+   "prompt.literal_anchor_retriever_v1": {
+    "role": "literal_anchor_retriever",
+    "handoff": "evidence_dossier"
+   },
+   "prompt.relational_chain_resolver_v1": {
+    "role": "relational_chain_resolver",
+    "handoff": "evidence_dossier"
+   },
+   "verifier.answer_obligation_v1": {
+    "role": "answer_obligation_verifier",
+    "submit_audits_at": [
+     12,
+     14
+    ]
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.dual16_26_close12_v1": {
+    "literal_maxTurns": 20,
+    "chain_maxTurns": 30,
+    "verifier_maxTurns": 16
+   },
+   "monitor_rail.literal_chain_obligation_audits_v1": {
+    "literal_audits_at": [
+     8,
+     14,
+     16,
+     18
+    ],
+    "chain_audits_at": [
+     10,
+     20,
+     24,
+     26,
+     28
+    ],
+    "verifier_audits_at": [
+     8,
+     12,
+     14
+    ]
+   },
+   "closure.dual_dossier_answer_schemas_v1": {
+    "dossier_fields": [
+     "answer_candidate",
+     "support_chain",
+     "source_ids",
+     "exact_quote_or_value",
+     "unresolved"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.parallel_evidence_then_obligation_v1": {
+    "parallel_research_nodes": 2,
+    "handoff_barriers": 1,
+    "final_verifier_nodes": 1
+   }
+  },
+  "iter_005": {
+   "prompt.contrast_deadline_lead_v1": {
+    "role": "lead",
+    "hardest_clue_check": true
+   },
+   "prompt.obligation_microcloser_v1": {
+    "role": "closer",
+    "focused_turns": 7
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.lead22_close7_freeform_v1": {
+    "lead_maxTurns": 28,
+    "lead_tool_cutoff": 22,
+    "closer_maxTurns": 12,
+    "closer_tool_cutoff": 7
+   },
+   "cutoff.forced_transcript_commit_v1": {
+    "lead_checkpoint": 14,
+    "lead_close": 20,
+    "lead_forced_commit_turn": 22,
+    "closer_close": 5,
+    "closer_forced_commit_turn": 7
+   },
+   "closure.forced_transcript_final_marker_v1": {
+    "marker": "FINAL:",
+    "nested_editors": 2
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: extracted_final}"
+   },
+   "verifier.answer_obligation_v1": {
+    "mode": "short_targeted_check"
+   },
+   "topology.serial_contrast_lead_microcloser_v1": {
+    "lead_nodes": 1,
+    "handoff_barriers": 1,
+    "closer_nodes": 1
+   }
+  },
+  "iter_006": {
+   "prompt.evidence_lattice_planner_v1": {
+    "role": "evidence_lattice_planner",
+    "max_turns": 4
+   },
+   "prompt.evidence_lattice_investigator_v1": {
+    "role": "evidence_lattice_investigator",
+    "handoff": "evidence_dossier"
+   },
+   "verifier.direct_answer_auditor_v1": {
+    "role": "direct_answer_auditor",
+    "max_turns": 16
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.lattice4_invest38_audit14_v1": {
+    "planner_maxTurns": 4,
+    "investigator_maxTurns": 42,
+    "investigator_tool_cutoff": 38,
+    "auditor_maxTurns": 16,
+    "auditor_tool_cutoff": 14
+   },
+   "cutoff.lattice_submit_deadlines_v1": {
+    "investigator_audits_at": [
+     10,
+     22,
+     30,
+     36
+    ],
+    "investigator_tool_cutoff": 38,
+    "auditor_audits_at": [
+     9,
+     12
+    ],
+    "auditor_tool_cutoff": 14
+   },
+   "monitor_rail.lattice_join_audits_v1": {
+    "investigator_audits_at": [
+     10,
+     22,
+     30
+    ],
+    "auditor_audit_at": 9
+   },
+   "closure.lattice_three_schemas_v1": {
+    "plan_fields": [
+     "output_obligation",
+     "clue_atoms",
+     "discovery_queries",
+     "validation_queries",
+     "identity_expansion"
+    ],
+    "dossier_fields": [
+     "answer_candidate",
+     "candidate_aliases",
+     "facts",
+     "source_ids",
+     "exact_evidence",
+     "unresolved",
+     "final_check"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.serial_lattice_plan_investigate_audit_v1": {
+    "planner_nodes": 1,
+    "investigator_nodes": 1,
+    "auditor_nodes": 1,
+    "handoff_barriers": 2
+   }
+  },
+  "iter_007": {
+   "prompt.literal_evidence_prosecutor_v1": {
+    "role": "literal_prosecutor",
+    "casefile_deadline_turn": 18
+   },
+   "prompt.reverse_constraint_prosecutor_v1": {
+    "role": "reverse_prosecutor",
+    "casefile_deadline_turn": 18
+   },
+   "verifier.cross_examination_arbiter_v1": {
+    "verdict_deadline_turn": 11,
+    "focused_checks_only": true
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.dual18_casefile_plus11_verdict_v1": {
+    "prosecutor_maxTurns": 22,
+    "prosecutor_commit_turn": 18,
+    "arbiter_maxTurns": 14,
+    "arbiter_commit_turn": 11,
+    "editor_maxTurns": 2
+   },
+   "cutoff.dual_forced_casefile_v1": {
+    "prosecutor_checkpoints": [
+     8,
+     14
+    ],
+    "prosecutor_commit_turn": 18,
+    "arbiter_checkpoint": 7,
+    "arbiter_commit_turn": 11
+   },
+   "monitor_rail.casefile_cross_examination_audits_v1": {
+    "literal_audit_turns": [
+     8,
+     14
+    ],
+    "reverse_audit_turns": [
+     8,
+     14
+    ],
+    "arbiter_audit_turn": 7
+   },
+   "closure.forced_casefile_final_marker_v1": {
+    "marker": "FINAL:",
+    "casefile_editors": 2,
+    "verdict_editors": 1
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: extracted_final}"
+   },
+   "topology.parallel_casefiles_then_cross_examination_v1": {
+    "parallel_prosecutors": 2,
+    "casefile_handoffs": 2,
+    "arbiter_nodes": 1,
+    "barriers": 1
+   }
+  },
+  "iter_008": {
+   "prompt.anchor_ledger_discoverer_v1": {
+    "role": "source_anchor_discoverer"
+   },
+   "prompt.final_hop_resolver_v1": {
+    "role": "final_hop_resolver"
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.anchor30_resolve20_commit2_v1": {
+    "discoverer_commit_turn": 30,
+    "resolver_commit_turn": 20,
+    "editor_maxTurns": 2
+   },
+   "cutoff.forced_transcript_commit_v1": {
+    "discoverer_commit_turn": 30,
+    "resolver_commit_turn": 20
+   },
+   "monitor_rail.anchor_final_edge_audits_v1": {
+    "discoverer_audits": [
+     10,
+     24
+    ],
+    "resolver_audits": [
+     9,
+     17
+    ]
+   },
+   "closure.forced_transcript_final_marker_v1": {
+    "handoff_limit": 14000,
+    "editor_transcript_limit": 24000,
+    "marker": "FINAL"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: exactAnswer(...)}"
+   },
+   "topology.serial_anchor_ledger_forced_final_hop_v1": {
+    "research_nodes": 2,
+    "commitment_nodes": 2,
+    "barriers": 1
+   }
+  },
+  "iter_009": {
+   "prompt.hypothesis_divergence_lead_v1": {
+    "role": "lead",
+    "handoff": "schema_memo",
+    "rival_check": true
+   },
+   "prompt.canonical_recovery_closer_v1": {
+    "role": "canonical_closer",
+    "full_name_policy": "legal_name_expansion",
+    "missing_edge_check": true
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.lead44_recovery2_close12_v1": {
+    "lead_maxTurns": 48,
+    "lead_tool_cutoff": 44,
+    "recovery_maxTurns": 2,
+    "closer_maxTurns": 16,
+    "closer_tool_cutoff": 12
+   },
+   "cutoff.divergence_memo_then_canonical_v1": {
+    "recovery_turn": 18,
+    "lead_closure_inject_turn": 38,
+    "lead_tool_cutoff": 44,
+    "closer_inject_turn": 10,
+    "closer_tool_cutoff": 12
+   },
+   "monitor_rail.transcript_recovery_director_v1": {
+    "checkpoint_turn": 18,
+    "director_maxTurns": 2,
+    "directives": [
+     "literal",
+     "inverse_final_field",
+     "candidate_disconfirmation"
+    ]
+   },
+   "closure.schema_memo_and_answer_v1": {
+    "memo_fields": [
+     "candidates",
+     "findings",
+     "sources",
+     "next_step"
+    ],
+    "answer_field": "answer"
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: result.answer}"
+   },
+   "topology.serial_lead_recovery_then_canonicalizer_v1": {
+    "lead_nodes": 1,
+    "embedded_recovery_nodes": 1,
+    "handoff_barriers": 1,
+    "closer_nodes": 1
+   }
+  },
+  "iter_010": {
+   "prompt.literal_source_casefile_v1": {
+    "role": "literal_source_casefile",
+    "casefile_commit_turn": 18
+   },
+   "prompt.reverse_final_field_casefile_v1": {
+    "role": "reverse_final_field_casefile",
+    "casefile_commit_turn": 18
+   },
+   "prompt.casefile_commit_editor_v1": {
+    "role": "commit_editor",
+    "maxTurns": 2
+   },
+   "verifier.casefile_obligation_arbiter_v1": {
+    "role": "casefile_obligation_arbiter",
+    "commit_turn": 11
+   },
+   "decoding.deterministic_v1": {
+    "temperature": 0,
+    "thinkingLevel": "off"
+   },
+   "turn_budget.dual18_casefile_plus11_verdict_v1": {
+    "prosecutor_maxTurns": 22,
+    "prosecutor_commit_turn": 18,
+    "arbiter_maxTurns": 14,
+    "arbiter_commit_turn": 11,
+    "editor_maxTurns": 2
+   },
+   "cutoff.dual_forced_casefile_v1": {
+    "prosecutor_checkpoints": [
+     8,
+     14
+    ],
+    "prosecutor_commit_turn": 18,
+    "arbiter_checkpoint": 7,
+    "arbiter_commit_turn": 11
+   },
+   "monitor_rail.casefile_cross_examination_audits_v1": {
+    "casefile_audits_at": [
+     8,
+     14
+    ],
+    "arbiter_audit_at": 7
+   },
+   "closure.compact_casefile_final_marker_v1": {
+    "marker": "FINAL:",
+    "transcript_limit": 18000,
+    "editors": 3
+   },
+   "output_contract.exact_answer_object_v1": {
+    "return": "{answer: forced || arbiter || literal || reverse}"
+   },
+   "topology.parallel_casefiles_then_obligation_v1": {
+    "parallel_casefiles": 2,
+    "casefile_editors": 2,
+    "arbiter_nodes": 1,
+    "verdict_editors": 1,
+    "barriers": 1
+   }
+  }
+ },
+ "manifest_log": [
+  {
+   "member": "seed",
+   "action": "SEED"
+  },
+  {
+   "member": "iter_001",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_002",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_003",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_004",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_005",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_006",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_007",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_008",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_009",
+   "action": "NEW_COMPONENT"
+  },
+  {
+   "member": "iter_010",
+   "action": "NEW_COMPONENT"
+  }
+ ]
+}

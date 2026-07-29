@@ -119,7 +119,7 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     n_easy = sum(1 for v in mult.values() if v >= 9)
     n_hard = sum(1 for v in mult.values() if 0 < v <= 5)
     a(f"- Of solved tasks, {n_easy} are solved by nearly every assembly (>=9/11) — for these, ANY")
-    a("  reliable preset works and CHEAPEST WINS. Do not overbuild.")
+    a("  reliable preset works; cost is the tiebreaker, not a reason to skip judgement.")
     a(f"- {n_hard} tasks are solved by few assemblies (<=5/11) — only here does component choice matter.")
     a("- Hard-task signals: many interlocking clues with no rare anchor phrase; person-name questions")
     a("  demanding full/formal names; questions whose decisive evidence needs long verification chains.")
@@ -170,13 +170,19 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     a("## 4. Dispatch policy")
     a("")
     chain = [c["member"] for c in book["cover_set"]]
-    default = chain[0] if chain else "seed"
-    a(f"1. DEFAULT: preset `{default}`. Escalation chain when a task looks hard for it: "
-      f"{' -> '.join(chain)} (the minimal set that covers every solved training task).")
-    a("2. A signature-case match (section 3) outranks the default chain: dispatch that owner.")
-    a("3. Prefer the cheaper of two presets with equal claim; never leave a question unanswered.")
-    a(f"4. Output format: JSON: {{\"preset\": \"{default}\", \"reason\": \"...\"}} — a preset name from "
-      "section 3 (only emit an {\"assembly\": ...} object if the interface you were given explicitly allows it).")
+    generalist = chain[0] if chain else "seed"
+    a("Judge EVERY question on its own evidence and pick the preset with the strongest claim —")
+    a("there is no default reflex. Weigh, in order of evidential strength:")
+    a("1. Signature-case match (section 3): a question resembling a preset's owned hard case in")
+    a("   structure and style is that preset's to take.")
+    a("2. Preset records (section 3 table): owned tasks, confirmed solves, and key components —")
+    a("   match the question's demands (answer shape, verification depth, anchor rarity) to what")
+    a("   a preset's components are built for.")
+    a(f"3. `{generalist}` is the proven generalist with the widest confirmed record: choose it when no")
+    a("   specialist has a STRONGER claim — as a judgement, not a habit. When two presets have equal")
+    a("   claim, take the cheaper one. Never leave a question unanswered.")
+    a("4. Output format: JSON: {\"preset\": \"<name>\", \"reason\": \"...\"} — any preset from section 3")
+    a("   (only emit an {\"assembly\": ...} object if the interface you were given explicitly allows it).")
     a("")
     a("## 5. Boundaries and warnings")
     a("")
