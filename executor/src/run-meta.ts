@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
+import { withTransportRetry } from "./retry.js";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import * as piAgentCore from "@earendil-works/pi-agent-core";
 import { runAgentNode, type AgentNodeDeps } from "./agent-node.js";
@@ -143,7 +144,7 @@ async function main(): Promise<number> {
 		tools,
 		journal,
 		budget,
-		streamFn: streamSimple as StreamFn,
+		streamFn: withTransportRetry(streamSimple as StreamFn, journal),
 		signal: controller.signal,
 	};
 	const core = { runAgentNode, deps, pi: piAgentCore };

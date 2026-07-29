@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
+import { withTransportRetry } from "./retry.js";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { Budget } from "./budget.js";
 import { BudgetExceededError, buildCtx } from "./dsl.js";
@@ -115,7 +116,7 @@ async function main(): Promise<number> {
 		models_available: [...visibleModels.keys()],
 	});
 
-	const ctx = buildCtx({ task, models: visibleModels, tools, journal, budget, streamFn: streamSimple as StreamFn, signal: controller.signal });
+	const ctx = buildCtx({ task, models: visibleModels, tools, journal, budget, streamFn: withTransportRetry(streamSimple as StreamFn, journal), signal: controller.signal });
 
 	try {
 		const result = await wf.run(ctx);
