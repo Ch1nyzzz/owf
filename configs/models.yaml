@@ -27,10 +27,10 @@ models:
     # axis remains comparable across endpoint switches.
     #
     # Thinking rides the SERVER default on every SUT call: with reasoning: false, pi-ai's
-    # deepseek compat sends no thinking param at all. The official API verifiably defaults
-    # to thinking ENABLED (reasoning_content billed inside completion output); gpugeek's
-    # default is UNVERIFIED — check a journal for reasoning_content before comparing token
-    # counts across endpoints. Side effect: pi drops thinkingLevel opts for reasoning:false
+    # deepseek compat sends no thinking param at all. BOTH endpoints verifiably default to
+    # thinking ENABLED (reasoning_content billed inside completion output; gpugeek verified
+    # by smoke call 2026-07-29), so token counts stay comparable across endpoints.
+    # Side effect: pi drops thinkingLevel opts for reasoning:false
     # models, so candidates cannot toggle thinking per-node. Do NOT flip this to
     # reasoning: true: pi would then send `thinking: {type: "disabled"}` on every call
     # that lacks an explicit thinkingLevel, silently turning thinking off.
