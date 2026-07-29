@@ -209,9 +209,9 @@ def materialize(decision: dict, presets: dict[str, str], dest: Path, name: str) 
 
 
 def run_task(task_id: str, workflow: Path, domain: str, out_dir: Path, repeats: int,
-             max_tokens: int, max_sec: int) -> dict | None:
+             max_tokens: int, max_sec: int, subset: str = "train") -> dict | None:
     cmd = ["python3", str(ROOT / "bench/owf_bench/core/runner.py"), "--domain", domain,
-           "--workflow", str(workflow), "--subset", "train", "--task-ids", task_id,
+           "--workflow", str(workflow), "--subset", subset, "--task-ids", task_id,
            "--repeats", str(repeats), "--workers", str(repeats), "--out", str(out_dir),
            "--max-tokens", str(max_tokens), "--max-wallclock-sec", str(max_sec)]
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=max_sec * repeats + 600,
@@ -236,6 +236,9 @@ def main() -> None:
     p.add_argument("--opt-root", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--task-ids", help="comma-separated; default: all training tasks in the book")
+    p.add_argument("--subset", choices=["train", "test"], default="train",
+                   help="test requires explicit --task-ids; the book stays train-side evidence only")
+    p.add_argument("--playbook", help="playbook path (default: <opt-root>/lab/playbook.md)")
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--workers", type=int, default=64, help="tasks processed concurrently (policy: ~64, <128)")
     p.add_argument("--max-tokens", type=int, default=600_000)
@@ -257,7 +260,7 @@ def main() -> None:
     out_root = Path(args.out).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     book = json.loads((opt_root / "task_book.json").read_text())
-    playbook = (opt_root / "lab/playbook.md").read_text()
+    playbook = Path(args.playbook).read_text() if args.playbook else (opt_root / "lab/playbook.md").read_text()
     domain = book["domain"]
     cfg = {"base_url": args.meta_base_url, "model": args.meta_model,
            "key": os.environ.get(args.meta_key_env, ""), "format": args.meta_format,
@@ -267,8 +270,10 @@ def main() -> None:
     from owf_bench.core.runner import load_dotenv, load_tasks
     load_dotenv()
     cfg["key"] = cfg["key"] or os.environ.get(args.meta_key_env, "")
+    if args.subset == "test" and not args.task_ids:
+        raise SystemExit("--subset test requires explicit --task-ids")
     wanted = [t.strip() for t in args.task_ids.split(",")] if args.task_ids else sorted(book["tasks"])
-    tasks = {t["id"]: t for t in load_tasks(domain, "train", None, wanted)}
+    tasks = {t["id"]: t for t in load_tasks(domain, args.subset, None, wanted)}
     presets = preset_workflows(book)
     default_preset = book["cover_set"][0]["member"] if book.get("cover_set") else "seed"
 
@@ -281,7 +286,7 @@ def main() -> None:
         wf = out_root / "assembled" / f"{tid}.js"
         kind = materialize(decision, presets, wf, f"meta-{tid}")
         report = run_task(tid, wf, domain, out_root / "rollouts" / tid, args.repeats,
-                          args.max_tokens, args.max_sec)
+                          args.max_tokens, args.max_sec, args.subset)
         score = report["task_scores"].get(tid) if report else None
         rec = {"task": tid, "choice": kind, "reason": str(decision.get("reason", ""))[:300],
                "meta": meta_stats, "score": score,

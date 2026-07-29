@@ -101,7 +101,7 @@ def confidence(comp: str, attr: dict) -> str:
     return "k=1"
 
 
-def render_playbook(book: dict, lab: dict, attr: dict) -> str:
+def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -> str:
     cov = book["coverage"]
     mult = attr["multiplicity"]
     stats = preset_stats(book)
@@ -171,19 +171,28 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     a("")
     chain = [c["member"] for c in book["cover_set"]]
     generalist = chain[0] if chain else "seed"
-    a("Judge EVERY question on its own evidence and pick the preset with the strongest claim —")
-    a("there is no default reflex. Weigh, in order of evidential strength:")
-    a("1. Signature-case match (section 3): a question resembling a preset's owned hard case in")
-    a("   structure and style is that preset's to take.")
-    a("2. Preset records (section 3 table): owned tasks, confirmed solves, and key components —")
-    a("   match the question's demands (answer shape, verification depth, anchor rarity) to what")
-    a("   a preset's components are built for.")
-    a(f"3. `{generalist}` is the proven generalist with the widest confirmed record: choose it when no")
-    a("   specialist has a STRONGER claim — as a judgement, not a habit. When two presets have equal")
-    a("   claim, take the cheaper one. Never leave a question unanswered.")
-    a("4. Output format: JSON: {\"preset\": \"<name>\", \"reason\": \"...\"} — any preset from section 3")
-    a("   (only emit an {\"assembly\": ...} object if the interface you were given explicitly allows it).")
-    a("")
+    if doctrine == "conservative":
+        a(f"1. DEFAULT: preset `{generalist}`. Escalation chain when a task looks hard for it: "
+          f"{' -> '.join(chain)} (the minimal set that covers every solved training task).")
+        a("2. A signature-case match (section 3) outranks the default chain: dispatch that owner.")
+        a("3. Prefer the cheaper of two presets with equal claim; never leave a question unanswered.")
+        a(f"4. Output format: JSON: {{\"preset\": \"{generalist}\", \"reason\": \"...\"}} — a preset name from "
+          "section 3 (only emit an {\"assembly\": ...} object if the interface explicitly allows it).")
+        a("")
+    else:
+        a("Judge EVERY question on its own evidence and pick the preset with the strongest claim —")
+        a("there is no default reflex. Weigh, in order of evidential strength:")
+        a("1. Signature-case match (section 3): a question resembling a preset's owned hard case in")
+        a("   structure and style is that preset's to take.")
+        a("2. Preset records (section 3 table): owned tasks, confirmed solves, and key components —")
+        a("   match the question's demands (answer shape, verification depth, anchor rarity) to what")
+        a("   a preset's components are built for.")
+        a(f"3. `{generalist}` is the proven generalist with the widest confirmed record: choose it when no")
+        a("   specialist has a STRONGER claim — as a judgement, not a habit. When two presets have equal")
+        a("   claim, take the cheaper one. Never leave a question unanswered.")
+        a("4. Output format: JSON: {\"preset\": \"<name>\", \"reason\": \"...\"} — any preset from section 3")
+        a("   (only emit an {\"assembly\": ...} object if the interface you were given explicitly allows it).")
+        a("")
     a("## 5. Boundaries and warnings")
     a("")
     a(f"- Lab record on training: union {cov['union']}/{cov['universe']}, reproducibly confirmed "
@@ -198,13 +207,15 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--opt-root", required=True)
+    p.add_argument("--doctrine", choices=["free", "conservative"], default="free")
+    p.add_argument("--out", help="default: <opt-root>/lab/playbook.md")
     args = p.parse_args()
     opt_root = Path(args.opt_root).resolve()
     book = json.loads((opt_root / "task_book.json").read_text())
     lab = json.loads((opt_root / "lab/components.json").read_text())
     attr = json.loads((opt_root / "lab/attribution.json").read_text())
-    dest = opt_root / "lab/playbook.md"
-    dest.write_text(render_playbook(book, lab, attr))
+    dest = Path(args.out) if args.out else opt_root / "lab/playbook.md"
+    dest.write_text(render_playbook(book, lab, attr, args.doctrine))
     print(f"wrote {dest} ({dest.stat().st_size} bytes)")
 
 
