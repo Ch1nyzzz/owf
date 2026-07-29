@@ -613,7 +613,9 @@ def main() -> None:
     # noise band) and final champion confirmation. Inside the loop k=1 + the noise-band
     # acceptance threshold carries the statistical load.
     p.add_argument("--eval-repeats", type=int, default=1)
-    p.add_argument("--eval-workers", type=int, default=32)
+    # Concurrency policy (user decision 2026-07-29): run parallel work at ~64,
+    # never above 128. The transport-retry layer absorbs load-induced 400s.
+    p.add_argument("--eval-workers", type=int, default=64)
     # Must equal the baseline run's cap; see evaluate(). realmath: 300000, bcplus: 600000.
     p.add_argument("--eval-max-tokens", type=int, default=300_000)
     p.add_argument("--eval-max-sec", type=int, default=1800)
@@ -807,7 +809,7 @@ def main() -> None:
                     subprocess.run(
                         ["python3", str(ROOT / "bench/owf_bench/core/runner.py"), "--domain", args.domain,
                          "--workflow", str(candidate), "--subset", "train", "--task-ids", ",".join(sorted(won)),
-                         "--repeats", str(args.confirm_repeats), "--workers", str(min(len(won) * args.confirm_repeats, 16)),
+                         "--repeats", str(args.confirm_repeats), "--workers", str(min(len(won) * args.confirm_repeats, 64)),
                          "--out", str(confirm_dir), "--max-tokens", str(args.eval_max_tokens),
                          "--max-wallclock-sec", str(args.eval_max_sec)],
                         cwd=ROOT, capture_output=True, text=True, timeout=14400,

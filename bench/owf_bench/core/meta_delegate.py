@@ -163,7 +163,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--task-ids", help="comma-separated; default: all training tasks in the book")
     p.add_argument("--repeats", type=int, default=1)
-    p.add_argument("--workers", type=int, default=16, help="tasks processed concurrently")
+    p.add_argument("--workers", type=int, default=64, help="tasks processed concurrently (policy: ~64, <128)")
     p.add_argument("--max-tokens", type=int, default=600_000)
     p.add_argument("--max-sec", type=int, default=1800)
     p.add_argument("--meta-base-url", default=os.environ.get("META_BASE_URL", "https://api.gpugeek.com/v1"))
