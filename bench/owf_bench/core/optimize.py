@@ -11,7 +11,10 @@ Per round:
   3. if a candidate landed: evaluate on train (k repeats), then place it on the
      (score up, tokens down) Pareto frontier — it enters unless an existing point
      dominates it, and evicts the points it dominates
-  4. compute health predicates; if fired -> run watchdog; apply verdict
+  4. update the per-task champion book (task_book.py): coverage is the search
+     objective — a candidate that claims unsolved tasks or takes owned tasks
+     cheaper is progress even when the aggregate frontier does not move
+  5. compute health predicates; if fired -> run watchdog; apply verdict
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from owf_bench.core import task_book
+
 ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = ROOT / "executor"
 
@@ -31,12 +36,10 @@ NO_CANDIDATE_STREAK = 3
 WATCHDOG_COOLDOWN = 5  # rounds between watchdog invocations
 
 # After this many rounds without a frontier entry, the round's instruction adds a reason
-# to re-open design-level decisions (topology, decomposition, roles). Runs freeze their
-# structure early — every observed run settles its topology within its first few rounds
-# and spends the rest on prompt-level edits — and a stalled frontier is the evidence that
-# the current design's neighborhood has stopped paying. Fires before the watchdog
-# (STAGNATION_ROUNDS=5): a stalled optimizer gets the evidence first, the watchdog only
-# if stalling continues.
+# to re-open design-level decisions (topology, decomposition, roles). LEGACY: only the
+# workflow-proposer path (opt_task_payload) still injects this hint; the codex path and
+# the meta-harness arm run unsteered for arm parity — their prompts differ only by the
+# orientation block.
 EXPLORE_HINT_ROUNDS = 3
 
 # Frontier admission is exact: a higher train score is a higher train score.
@@ -180,6 +183,32 @@ def build_gold_line(opt_root: Path) -> str:
     ) if train_gold.exists() else ""
 
 
+def build_coverage_block(opt_root: Path) -> str:
+    """The lab-coverage view of the task book, as evidence for the search round.
+
+    Summary only — per-task detail stays in task_book.json, which is inside the
+    optimizer's read scope; the block names the path so the round can drill in.
+    """
+    book_path = opt_root / "task_book.json"
+    if not book_path.exists():
+        return ""
+    book = json.loads(book_path.read_text())
+    cov = book["coverage"]
+    cover = " + ".join(f"{c['member']}(+{c['marginal']})" for c in book["cover_set"]) or "none"
+    return (
+        f"\nLAB COVERAGE (task book: {book_path}) — the search objective is coverage of the task set by "
+        f"the roster as a whole, not any single member's average score:\n"
+        f"  solved at least once: {cov['union']}/{cov['universe']} | reproducibly confirmed "
+        f"(>= {book['params']['confirm_reps']} reps): {cov['confirmed']}/{cov['universe']} | "
+        f"greedy cover set: {cover}\n"
+        f"  UNSOLVED BY EVERY MEMBER ({len(cov['unsolved'])}): {', '.join(cov['unsolved']) or 'none'}\n"
+        f"  A candidate that solves ANY unsolved task, or takes owned tasks cheaper or more stably, is "
+        f"real progress even if its average score enters no frontier. The task book records each task's "
+        f"owner, contenders and passing-rollout pointers; the failed rollouts on unsolved tasks are the "
+        f"residual evidence to mine.\n"
+    )
+
+
 def build_stalled_line(state: dict) -> str:
     stalled = stalled_rounds(state["history"])
     return (
@@ -211,6 +240,7 @@ def opt_task_payload(opt_root: Path, domain: str, it: int, state: dict, opt_mode
             f"on, but the frontier records what was measured, not what survived a significance test. "
             f"Tokens are input+output per task, counting cache-miss input only. Every node, every turn and "
             f"every word a node is asked to write spends this budget.\n"
+            f"{build_coverage_block(opt_root)}"
             f"Parent choice is YOURS: any frontier point, any earlier candidate (iter_*/candidate.js, each with "
             f"its eval report), or a graft across them — rejected candidates often contain good ideas that did "
             f"not clear the bar alone. State your chosen parent(s) in your notes.\n"
@@ -247,37 +277,46 @@ WORKFLOW_REP_CONTRACT = """THE REPRESENTATION — a workflow.js orchestration pr
 
 
 def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> str:
+    # Deliberately unsteered (arm parity with meta_loop.py): no first-round redesign mandate,
+    # no stalled-frontier hint, no refuted-hypothesis rule. The arms' prompts differ only by
+    # the orientation block injected in run_codex_round.
     frontier = state["frontier"]
     band = state.get("noise_band", 0.04)
-    first_round_line = (
-        "This is the first round: ship a REDESIGN — design the organization for this task from "
-        "its anatomy. Refinement has its turn once there is a designed organization to refine.\n"
-    ) if not state["history"] else ""
+    band_line = (
+        f"For context on how much scores wobble, the baseline measured a ±{band} run-to-run band "
+        "across k repeats (evidence/stability.json). "
+    ) if band else (
+        "The baseline was measured once (k=1); run-to-run variance is UNMEASURED on this substrate — "
+        "treat small score deltas as unresolved. "
+    )
     return (
-        f"Optimization round {it} for domain '{domain}'. Working directory: {opt_root} (the optimization root).\n\n"
+        f"Search round {it} for domain '{domain}' — the team-building phase: the deliverable of this run "
+        f"is a roster of workflows that together cover the task set, not one champion.\n"
+        f"Working directory: {opt_root} (the optimization root).\n\n"
         f"CURRENT PARETO FRONTIER — {len(frontier)} non-dominated point(s) on (score up, tokens down):\n"
         f"{frontier_table(frontier, band)}\n"
         "A candidate enters the frontier by not being dominated: it must beat some point on score or use "
         "fewer tokens, without being worse on the other axis. Admission is exact — no noise tolerance is "
-        f"applied. For context on how much scores wobble, the baseline measured a ±{band} run-to-run band "
-        "across k repeats (evidence/stability.json). Tokens are input+output per task.\n"
+        f"applied. {band_line}Tokens are input+output per task.\n"
+        f"{build_coverage_block(opt_root)}"
         f"{build_gold_line(opt_root)}"
-        f"{first_round_line}"
-        f"{build_stalled_line(state)}"
         "Evidence layout: evidence/stability.json (per-task stability); evidence/baseline/ — the canonical "
         "seed rollouts (one dir per task: journal.jsonl + full per-node transcripts); iter_*/eval/ — every "
         "prior candidate's evaluation (results.jsonl, report.json, one rollout dir per task); "
-        "iter_*/optimizer.out.md — prior rounds' deliberation; state.json — round history; "
-        "NOTES.md — cross-round memory.\n"
-        "Parent choice is YOURS: any frontier point or any earlier candidate (iter_*/candidate.js, each with "
-        "its eval report) — rejected candidates often contain good ideas that did not clear the bar alone."
+        "iter_*/candidate.js — every prior candidate's source; iter_*/optimizer.out.md — prior rounds' "
+        "deliberation; state.json — round history; NOTES.md — cross-round memory."
     )
 
 
 def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir: Path,
                     opt_model: str, lead_timeout: int) -> tuple[Path, dict]:
-    """One optimization round: a single codex session (shared shape with the meta-harness arm)."""
-    from owf_bench.core.codex_solo import ArmSpec, run_solo
+    """One optimization round: a single codex session (protocol shared with the meta-harness arm).
+
+    The only prompt-level difference from the baseline arm is ORIENTATION_SWARM — the
+    standing preference for designing swarm collaboration schemes. That block, plus the
+    workflow-DSL representation, is what this arm tests.
+    """
+    from owf_bench.core.codex_solo import ORIENTATION_SWARM, ArmSpec, run_solo
 
     candidate = iter_dir / "candidate.js"
     spec = ArmSpec(
@@ -287,9 +326,10 @@ def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir:
         candidate_path=candidate,
         validate_cmd=f"cd {EXECUTOR} && npx tsx src/run.ts --validate-only {candidate}",
         extra=(
-            f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "hypothesis": str, '
-            f'"predictions": str, "summary": str}}.'
+            f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "summary": str, '
+            f'"notes": str (optional)}}.'
         ),
+        orientation=ORIENTATION_SWARM,
     )
     t0 = time.time()
     sessions = run_solo(opt_root, iter_dir, spec, opt_model, timeout=lead_timeout)
@@ -332,11 +372,14 @@ def compute_predicates(state: dict) -> list[str]:
     # evaluated. What fires here is the watchdog, not a retry.
     if last and isinstance(last.get("result"), dict) and last["result"].get("node_failed"):
         fired.append("optimizer_lead_node_failed")
-    # Stagnation is now "the frontier stopped moving", not "the top score stopped rising":
-    # a round that only made things cheaper is real progress on the second axis.
+    # Stagnation is "neither ledger moved": no frontier entry AND no task-book movement.
+    # A round that claims an unsolved task or takes an owned task cheaper is real progress
+    # even when its aggregate score enters no frontier — coverage is the search objective.
     recent_rounds = hist[-STAGNATION_ROUNDS:]
-    if len(recent_rounds) == STAGNATION_ROUNDS and not any(h.get("entered_frontier") for h in recent_rounds):
-        fired.append(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_entry")
+    if len(recent_rounds) == STAGNATION_ROUNDS and not any(
+        h.get("entered_frontier") or h.get("book_moved") for h in recent_rounds
+    ):
+        fired.append(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_or_book_movement")
     return fired
 
 
@@ -516,6 +559,16 @@ def main() -> None:
     if not (opt_root / "NOTES.md").exists():
         (opt_root / "NOTES.md").write_text("(empty — first round)\n")
 
+    # Round 1 must already see the coverage block, so the book exists before the loop.
+    book_path = opt_root / "task_book.json"
+    if not book_path.exists():
+        initial_book = task_book.build_book(opt_root)
+        initial_book["domain"] = initial_book["domain"] or args.domain
+        book_path.write_text(json.dumps(initial_book, indent=1, ensure_ascii=False))
+        cov = initial_book["coverage"]
+        print(f"task book initialised: union {cov['union']}/{cov['universe']}, "
+              f"unsolved {len(cov['unsolved'])}")
+
     start_iter = (state["history"][-1]["iter"] + 1) if state["history"] else 1
     for it in range(start_iter, start_iter + args.iters):
         top = best_by_score(state["frontier"])
@@ -568,6 +621,20 @@ def main() -> None:
                             "candidate_tokens_per_task": report["tokens_per_task"]})
                 verdict = f"-> frontier ({len(state['frontier'])} pts)" if entered else "dominated"
                 print(f"  candidate {report['score']:.3f} @ {cand_tokens:,} tok {verdict}")
+
+                # The second ledger: rebuild the task book (pure function of graded
+                # evidence on disk) and record what this candidate changed in it.
+                book_path = opt_root / "task_book.json"
+                old_book = json.loads(book_path.read_text()) if book_path.exists() else None
+                book = task_book.build_book(opt_root)
+                delta = task_book.diff_books(old_book, book)
+                book_path.write_text(json.dumps(book, indent=1, ensure_ascii=False))
+                book_moved = bool(delta["claimed"] or delta["took_over"])
+                rec.update({"book_moved": book_moved, "book_delta": delta})
+                if book_moved:
+                    print(f"  book: claimed {delta['claimed'] or '[]'}, "
+                          f"took over {[d['task'] for d in delta['took_over']] or '[]'}, "
+                          f"union {delta['union']}")
             else:
                 rec.update({"candidate_score": None, "entered_frontier": False, "eval_failed": True})
         best = best_by_score(state["frontier"])
@@ -592,7 +659,11 @@ def main() -> None:
 
     # The champion still owes a k=3 confirmation and the held-out test set; the frontier
     # is measured at k=1 and picking its best point is exactly where luck accumulates.
+    # Coverage counts carry the same caveat: `union` includes k=1 solves — only
+    # `confirmed` is settled evidence (task_book.py --emit-confirm buys the rest).
+    final_book = json.loads(book_path.read_text())
     print(json.dumps({"frontier": state["frontier"], "champion_by_score": best_by_score(state["frontier"]),
+                      "coverage": final_book["coverage"], "cover_set": final_book["cover_set"],
                       "rounds": len(state["history"]), "watchdog_events": state["watchdog_events"]}, indent=1))
 
 

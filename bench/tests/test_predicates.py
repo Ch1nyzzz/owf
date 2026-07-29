@@ -14,13 +14,14 @@ from owf_bench.core.optimize import (
 )
 
 
-def rnd(it, *, status="ok", made=True, entered=True, result=None):
+def rnd(it, *, status="ok", made=True, entered=True, result=None, book_moved=False):
     """One history record, healthy by default; override the field under test."""
     return {
         "iter": it,
         "optimizer_status": status,
         "candidate_made": made,
         "entered_frontier": entered,
+        "book_moved": book_moved,
         "result": result,
     }
 
@@ -85,15 +86,31 @@ class TestStreaks(unittest.TestCase):
         history.append(rnd(NO_CANDIDATE_STREAK, made=True, entered=False))
         self.assertNotIn(f"no_candidate_{NO_CANDIDATE_STREAK}_rounds", compute_predicates(state(history)))
 
-    def test_stagnation_is_no_frontier_entry_not_a_flat_top_score(self):
+    def test_stagnation_is_both_ledgers_still_not_a_flat_top_score(self):
         history = [rnd(i, entered=False) for i in range(1, STAGNATION_ROUNDS + 1)]
-        self.assertIn(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_entry", compute_predicates(state(history)))
+        self.assertIn(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_or_book_movement",
+                      compute_predicates(state(history)))
 
     def test_a_cheaper_round_that_entered_the_frontier_is_progress(self):
         # Entering on the token axis alone clears stagnation — the whole point of the second axis.
         history = [rnd(i, entered=False) for i in range(1, STAGNATION_ROUNDS)]
         history.append(rnd(STAGNATION_ROUNDS, entered=True))
         self.assertEqual(compute_predicates(state(history)), [])
+
+    def test_task_book_movement_alone_clears_stagnation(self):
+        # A round that claims an unsolved task enters no frontier but moves the coverage
+        # ledger — that is progress under the search objective, not stagnation.
+        history = [rnd(i, entered=False) for i in range(1, STAGNATION_ROUNDS)]
+        history.append(rnd(STAGNATION_ROUNDS, entered=False, book_moved=True))
+        self.assertEqual(compute_predicates(state(history)), [])
+
+    def test_pre_book_history_records_still_evaluate(self):
+        # Records written before the task book existed lack book_moved entirely.
+        history = [rnd(i, entered=False) for i in range(1, STAGNATION_ROUNDS + 1)]
+        for h in history:
+            del h["book_moved"]
+        self.assertIn(f"stagnation_{STAGNATION_ROUNDS}_rounds_no_frontier_or_book_movement",
+                      compute_predicates(state(history)))
 
 
 class TestStalledRounds(unittest.TestCase):

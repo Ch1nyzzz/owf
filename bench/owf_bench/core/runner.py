@@ -164,6 +164,8 @@ def main() -> None:
     for r in results:
         by_task.setdefault(r["task_id"], []).append(r)
     task_scores = {tid: sum(x["score"] for x in rs) / len(rs) for tid, rs in by_task.items()}
+    task_tokens = {tid: sum(x["tokens"]["input"] + x["tokens"]["output"] for x in rs) // len(rs)
+                   for tid, rs in by_task.items()}
     total_in = sum(r["tokens"]["input"] for r in results)
     total_out = sum(r["tokens"]["output"] for r in results)
     report = {
@@ -181,6 +183,8 @@ def main() -> None:
         "tokens_per_task_total": (total_in + total_out) // max(1, len(results)),
         "statuses": {s: sum(1 for r in results if r["status"] == s) for s in {r["status"] for r in results}},
         "task_scores": task_scores,
+        # per-task mean spend across repeats — the task book's tiebreak axis
+        "task_tokens": task_tokens,
     }
     (out_dir / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False))
     print(json.dumps({k: report[k] for k in ("score", "n_tasks", "tokens_per_task", "tokens_per_task_total", "statuses")}, indent=1))
