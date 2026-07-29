@@ -23,6 +23,8 @@ import re
 import shutil
 import subprocess
 import threading
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -47,6 +49,30 @@ SPEC_HELP = """Assembly spec fields (JSON):
 
 
 def call_meta(prompt: str, cfg: dict) -> tuple[str, dict]:
+    """One dispatch call, throttled and 429-tolerant.
+
+    The kimi coding endpoint rate-limits hard: at 64-way task parallelism the
+    unthrottled version burned 20/50 decisions on 429s (both exam rounds — the
+    'invalid response' fallbacks were rate limiting all along). Decisions take
+    seconds while rollouts take minutes, so a small semaphore costs no
+    wall-clock; 429/5xx get exponential backoff on top.
+    """
+    sem = cfg.get("semaphore")
+    for attempt in range(6):
+        try:
+            if sem:
+                with sem:
+                    return _call_meta_once(prompt, cfg)
+            return _call_meta_once(prompt, cfg)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503) or attempt == 5:
+                raise
+            import random
+            time.sleep(min(5 * 2 ** attempt, 60) + random.uniform(0, 3))
+    raise RuntimeError("unreachable")
+
+
+def _call_meta_once(prompt: str, cfg: dict) -> tuple[str, dict]:
     # max_tokens must leave room for server-default thinking: models that bill
     # reasoning inside the completion return EMPTY content at small budgets —
     # exactly how flash "failed" the first smoke test. Match the per-completion
@@ -220,6 +246,8 @@ def main() -> None:
     p.add_argument("--meta-format", choices=["openai", "anthropic"],
                    default=os.environ.get("META_FORMAT", "openai"))
     p.add_argument("--meta-max-tokens", type=int, default=int(os.environ.get("META_MAX_TOKENS", 32768)))
+    p.add_argument("--meta-concurrency", type=int, default=4,
+                   help="max simultaneous meta calls (the kimi coding endpoint rate-limits hard)")
     p.add_argument("--allow-novel", action="store_true",
                    help="permit {'assembly': ...} decisions (needs an assembler vocabulary for this domain)")
     p.add_argument("--champion-member", default=None, help="member used as the champion reference line")
@@ -233,7 +261,8 @@ def main() -> None:
     domain = book["domain"]
     cfg = {"base_url": args.meta_base_url, "model": args.meta_model,
            "key": os.environ.get(args.meta_key_env, ""), "format": args.meta_format,
-           "max_tokens": args.meta_max_tokens}
+           "max_tokens": args.meta_max_tokens,
+           "semaphore": threading.Semaphore(max(1, args.meta_concurrency))}
 
     from owf_bench.core.runner import load_dotenv, load_tasks
     load_dotenv()
