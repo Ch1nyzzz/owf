@@ -1,17 +1,23 @@
 """Meta-harness baseline arm: evolve a free-form agent module, no workflow DSL.
 
-Loop protocol from the meta-harness reference (stanford-iris-lab/meta-harness):
-append-only agents/ archive (hash-gated), one candidate per iteration via
-pending_eval.json with hypothesis/prediction on record, frontier_val.json +
-evolution_summary.jsonl as cross-iteration memory, import gate before
-evaluation.
+Faithful to the meta-harness reference (arXiv 2603.28052): one agentic
+proposer session per iteration, guided by a minimal skill — where to write
+new candidates, how to inspect prior candidates and their execution traces,
+and what it may not touch. The filesystem is the memory: append-only agents/
+archive (hash-gated), full eval artifacts per iteration, frontier_val.json +
+evolution_summary.jsonl. No steering: no redesign/refine instruction, no
+stalled-frontier hint, no mandated hypotheses, no refuted-hypothesis rule —
+whatever search strategy the proposer forms, it forms from the evidence.
 
-Optimizer organization: the SAME single codex session per iteration as the
-main arm (core/codex_solo.py) — which is also the original meta-harness
-loop's shape. The organization is a controlled variable of the arm
-comparison; the arms differ ONLY in the representation of the evolvable
-object (free JS module here, workflow DSL there). Substrate is likewise shared: candidates run through run-meta.ts on the
-executor's frozen stack, and iteration 0 is the canonical seed measurement.
+The main arm (core/optimize.py --proposer codex) shares this loop shape,
+prompt skeleton, budgets and gates; its prompt differs by exactly one block
+(codex_solo.ORIENTATION_SWARM — a standing preference for designing swarm
+collaboration schemes) plus its workflow-DSL representation. Deliberate
+deviations from the paper, kept for arm parity: one candidate per iteration
+(the paper's proposer ships 2–3) and a single shared seed instead of a
+multi-baseline population. Substrate is shared: candidates run through
+run-meta.ts on the executor's frozen stack, and iteration 0 is the
+canonical seed measurement.
 
 Candidate runtime has no sandbox (free-code evolution is the point), so the
 cheating boundary gets a mechanical tripwire instead: a static scan rejects
@@ -37,7 +43,7 @@ EXECUTOR = ROOT / "executor"
 SEED_DIR = Path(__file__).resolve().parent / "agents_seed"
 
 from owf_bench.core.codex_solo import ArmSpec, run_solo  # noqa: E402
-from owf_bench.core.optimize import EXPLORE_HINT_ROUNDS, update_frontier, write_train_gold  # noqa: E402
+from owf_bench.core.optimize import update_frontier, write_train_gold  # noqa: E402
 
 DOMAIN_TOOLS = {"realmath": "['python']", "bcplus": "['search', 'open_doc']"}
 
@@ -79,8 +85,10 @@ def rep_contract(domain: str, agents_dir: Path) -> str:
   sanctioned gold channel."""
 
 
-def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled: int,
-                  first_round: bool = False) -> str:
+def evidence_text(run_root: Path, domain: str, it: int, frontier: dict) -> str:
+    # Deliberately unsteered (paper fidelity + arm parity): no first-round redesign mandate,
+    # no stalled-frontier hint, no refuted-hypothesis rule. The proposer reads the history
+    # and forms its own strategy.
     pareto_lines = "\n".join(
         f"  - {p['name']}: score {p['score']:.4f}, {p['tokens']:,} tokens/task (report: {p['report']})"
         for p in frontier.get("pareto", [])
@@ -90,43 +98,32 @@ def evidence_text(run_root: Path, domain: str, it: int, frontier: dict, stalled:
         f"Train-set gold answers: {gold} (task_id -> gold) — evidence for judging what a rollout "
         "actually produced against what was required.\n"
     ) if gold.exists() else ""
-    stalled_line = (
-        f"The frontier has not moved in the last {stalled} rounds — refinement has stopped paying; "
-        f"weigh a redesign.\n"
-    ) if stalled >= EXPLORE_HINT_ROUNDS else ""
-    first_round_line = (
-        "This is the first round: ship a REDESIGN — design the organization for this task from "
-        "its anatomy. Refinement has its turn once there is a designed organization to refine.\n"
-    ) if first_round else ""
+    stability = run_root / "evidence/stability.json"
+    band_line = ""
+    if stability.exists():
+        band = json.loads(stability.read_text()).get("noise_band")
+        band_line = (
+            f"For context on how much scores wobble, the baseline measured a ±{band} run-to-run band "
+            f"across k repeats ({stability}).\n"
+        ) if band else (
+            "The baseline was measured once (k=1); run-to-run variance is UNMEASURED on this substrate — "
+            "treat small score deltas as unresolved.\n"
+        )
     return (
         f"Optimization round {it} for domain '{domain}'. Working directory: {run_root} (the run root).\n\n"
         f"CURRENT PARETO FRONTIER on (score up, tokens down):\n{pareto_lines}\n"
         "A candidate enters the frontier by not being dominated: it must beat some point on score or use "
         "fewer tokens, without being worse on the other axis. Admission is exact. Tokens are input+output "
         "per task.\n"
+        f"{band_line}"
         f"{gold_line}"
-        f"{first_round_line}"
-        f"{stalled_line}"
-        "Evidence layout: evolution_summary.jsonl — every prior candidate: hypothesis, changes, score, "
-        "tokens, statuses; read it first and do not re-test a refuted hypothesis. frontier_val.json — "
-        "Pareto set and per-task best agents. iter_*/eval/ — full evaluation artifacts per prior "
-        "candidate (results.jsonl, report.json, one rollout dir per task with journal.jsonl and full "
-        "per-node transcripts). The canonical seed rollouts are the baseline evaluation referenced by "
-        "iteration 0 in evolution_summary.jsonl. agents/ — every agent so far; read any, modify none. "
-        "NOTES.md — cross-round memory."
+        "Evidence layout: evolution_summary.jsonl — every prior candidate: name, score, tokens, statuses. "
+        "frontier_val.json — Pareto set and per-task best agents. iter_*/eval/ — full evaluation "
+        "artifacts per prior candidate (results.jsonl, report.json, one rollout dir per task with "
+        "journal.jsonl and full per-node transcripts). The canonical seed rollouts are the baseline "
+        "evaluation referenced by iteration 0 in evolution_summary.jsonl. agents/ — every agent so far; "
+        "read any, modify none. NOTES.md — cross-round memory."
     )
-
-
-def meta_stalled_rounds(summary_path: Path) -> int:
-    if not summary_path.exists():
-        return 0
-    rows = [json.loads(l) for l in summary_path.read_text().splitlines() if l.strip()]
-    n = 0
-    for row in reversed(rows):
-        if row.get("entered_pareto"):
-            break
-        n += 1
-    return n
 
 
 def validate_agent(agent_file: Path) -> tuple[bool, str]:
@@ -185,6 +182,11 @@ def main() -> None:
     if not (agents_dir / baseline).exists():
         shutil.copy(SEED_DIR / baseline, agents_dir / baseline)
     write_train_gold(run_root, args.domain)  # same evidence parity as the main arm
+    # Evidence parity with the main arm: the seed's k>=3 stability report (noise band,
+    # per-task oscillation) is arm-independent seed evidence; expose it when available.
+    stability_src = Path(args.baseline_run).resolve() / "stability.json"
+    if stability_src.exists():
+        shutil.copy(stability_src, run_root / "evidence/stability.json")
 
     frontier_path = run_root / "frontier_val.json"
     summary_path = run_root / "evolution_summary.jsonl"
@@ -211,7 +213,7 @@ def main() -> None:
                     "per_task_best": {t: {"agent": name, "score": s}
                                       for t, s in report["task_scores"].items()}}
         frontier_path.write_text(json.dumps(frontier, indent=1))
-        record({"iteration": 0, "name": name, "hypothesis": "parity seed",
+        record({"iteration": 0, "name": name, "notes": "parity seed",
                 "changes": f"canonical baseline (shared iteration 0): {base}",
                 "score": report["score"], "tokens_per_task_total": base_tokens,
                 "statuses": report.get("statuses"), "report": str(base / "report.json"),
@@ -229,17 +231,13 @@ def main() -> None:
         spec = ArmSpec(
             subject="a free-form agent program (a plain-JS agent module)",
             rep_contract=rep_contract(args.domain, agents_dir),
-            evidence_text=evidence_text(run_root, args.domain, it, frontier,
-                                        meta_stalled_rounds(summary_path),
-                                        first_round=(it == done and done == 0)),
+            evidence_text=evidence_text(run_root, args.domain, it, frontier),
             candidate_path=Path(f"{agents_dir}/<candidate_name>.mjs (a NEW file; you choose the name)"),
             validate_cmd=f"cd {EXECUTOR} && npx tsx src/run-meta.ts --validate-agent <your file>",
             extra=(
                 f"- Also write exactly {pending}:\n"
                 '  {"iteration": N, "candidates": [{"name": "<snake_case_name>", '
-                '"agent_file": "agents/<candidate_name>.mjs", "hypothesis": "<falsifiable claim '
-                'grounded in cited evidence>", "changes": "<what the mechanism does>", '
-                '"prediction": "<expected score/token effect and which tasks should move>"}]}\n'
+                '"agent_file": "agents/<candidate_name>.mjs", "notes": "<optional free-form>"}]}\n'
                 "  The candidates array must contain exactly one entry."
             ),
         )
@@ -275,7 +273,7 @@ def main() -> None:
             continue
         cand = cands[0]
         agent_file = run_root / cand.get("agent_file", "")
-        row.update({k: cand.get(k) for k in ("name", "hypothesis", "changes", "prediction")})
+        row.update({k: cand.get(k) for k in ("name", "notes")})
         if agents_dir not in agent_file.parents or not agent_file.exists():
             row.update({"rejected": f"agent_file outside agents/ or missing: {cand.get('agent_file')}"})
             record(row)
