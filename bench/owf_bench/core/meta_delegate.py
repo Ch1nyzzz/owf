@@ -22,7 +22,9 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from owf_bench.core.assemble import render, validate_spec
@@ -161,6 +163,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--task-ids", help="comma-separated; default: all training tasks in the book")
     p.add_argument("--repeats", type=int, default=1)
+    p.add_argument("--workers", type=int, default=16, help="tasks processed concurrently")
     p.add_argument("--max-tokens", type=int, default=600_000)
     p.add_argument("--max-sec", type=int, default=1800)
     p.add_argument("--meta-base-url", default=os.environ.get("META_BASE_URL", "https://api.gpugeek.com/v1"))
@@ -187,8 +190,10 @@ def main() -> None:
     wanted = [t.strip() for t in args.task_ids.split(",")] if args.task_ids else sorted(book["tasks"])
     tasks = {t["id"]: t for t in load_tasks(domain, "train", None, wanted)}
 
-    records = []
-    for tid in wanted:
+    write_lock = threading.Lock()
+    records: list[dict] = []
+
+    def process(tid: str) -> dict:
         decision, meta_stats = decide(tasks[tid], playbook, cfg)
         wf = out_root / "assembled" / f"{tid}.js"
         kind = materialize(decision, opt_root, wf, f"meta-{tid}")
@@ -201,10 +206,19 @@ def main() -> None:
                "refs": reference_scores(book, tid)}
         if "assembly" in decision:
             rec["assembly"] = decision["assembly"]
-        records.append(rec)
-        print(f"{tid}: {kind} -> score {score} (owner {rec['refs']['owner']} "
-              f"{rec['refs']['owner_rate']}, champion {rec['refs']['champion_rate']}) {rec['reason'][:80]}")
-        (out_root / "delegation.json").write_text(json.dumps(records, indent=1, ensure_ascii=False))
+        return rec
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(process, tid): tid for tid in wanted}
+        for i, fut in enumerate(as_completed(futures), 1):
+            rec = fut.result()
+            with write_lock:
+                records.append(rec)
+                (out_root / "delegation.json").write_text(json.dumps(records, indent=1, ensure_ascii=False))
+            print(f"[{i}/{len(wanted)}] {rec['task']}: {rec['choice']} -> score {rec['score']} "
+                  f"(owner {rec['refs']['owner']} {rec['refs']['owner_rate']}, "
+                  f"champion {rec['refs']['champion_rate']}) {rec['reason'][:80]}")
+    records.sort(key=lambda r: r["task"])
 
     scored = [r for r in records if r["score"] is not None]
     summary = {
