@@ -128,10 +128,24 @@ def discover_members(opt_root: Path) -> list[dict]:
         report = json.loads((eval_dir / "report.json").read_text())
         members.append({"name": iter_dir.name, "workflow": report["workflow"], "sources": [eval_dir]})
     for m in members:
-        confirm = opt_root / "confirm" / m["name"]
-        if (confirm / "results.jsonl").exists():
-            m["sources"].append(confirm)
+        # Flat confirm/<member> is the legacy first round; later rounds live in
+        # confirm/round_NNN/<member>. Every round is a separate runner --out dir:
+        # runner REWRITES results.jsonl at --out with only the current jobs, so
+        # reusing a dir destroys the earlier round's graded rows (it happened —
+        # round 2 into the flat dirs cost 6 members their round-1 evidence), and
+        # resuming old rollouts silently re-grades them instead of sampling the
+        # fresh attempts a new confirmation round is for.
+        candidates = [opt_root / "confirm" / m["name"],
+                      *sorted(opt_root.glob(f"confirm/round_*/{m['name']}"))]
+        m["sources"] += [c for c in candidates if (c / "results.jsonl").exists()]
     return members
+
+
+def next_confirm_round(opt_root: Path) -> Path:
+    """The out-dir root for the next confirmation round (flat confirm/ = round 1)."""
+    taken = {int(p.name.split("_")[1]) for p in opt_root.glob("confirm/round_*")
+             if p.name.split("_")[1].isdigit()}
+    return opt_root / "confirm" / f"round_{max(taken, default=1) + 1:03d}"
 
 
 def build_book(opt_root: Path, token_margin: float = TOKEN_MARGIN) -> dict:
@@ -244,10 +258,11 @@ def confirm_targets(book: dict) -> dict[str, list[str]]:
 
 def emit_confirm_commands(book: dict, repeats: int, max_tokens: int, max_sec: int) -> list[str]:
     opt_root = Path(book["opt_root"])
+    round_root = next_confirm_round(opt_root)
     cmds = []
     for member, tids in confirm_targets(book).items():
         workflow = book["members"][member]["workflow"]
-        out = opt_root / "confirm" / member
+        out = round_root / member
         cmds.append(
             f"PYTHONPATH=bench python3 bench/owf_bench/core/runner.py "
             f"--domain {book['domain']} --workflow {workflow} --subset train "

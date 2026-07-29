@@ -13,7 +13,9 @@ from owf_bench.core.task_book import (
     build_book,
     confirm_targets,
     diff_books,
+    emit_confirm_commands,
     make_entry,
+    next_confirm_round,
 )
 
 
@@ -165,6 +167,25 @@ class TestBuildBook(unittest.TestCase):
         self.assertEqual(after["tasks"]["t1"]["entries"]["seed"],
                          before["tasks"]["t1"]["entries"]["seed"])
         self.assertEqual(after["tasks"]["t1"]["owner"], "seed")
+
+    def test_round_dirs_accumulate_as_sources(self):
+        # Evidence from confirm/<m> (round 1) and confirm/round_002/<m> merges;
+        # separate dirs per round is what stops runner from rewriting earlier rows.
+        root = self.make_root()
+        write_source(root / "confirm/iter_002", "i2.js", {"t2": [(1.0, 140), (0.0, 160)]})
+        write_source(root / "confirm/round_002/iter_002", "i2.js", {"t2": [(1.0, 150)]})
+        book = build_book(root)
+        e = book["tasks"]["t2"]["entries"]["iter_002"]
+        self.assertEqual((e["reps"], e["passes"]), (4, 3))  # 1 eval + 2 r1 + 1 r2
+        self.assertEqual(e["status"], "confirmed")
+
+    def test_emitted_commands_target_a_fresh_round_dir(self):
+        root = self.make_root()
+        write_source(root / "confirm/round_002/iter_002", "i2.js", {"t9": [(1.0, 1)]})
+        self.assertEqual(next_confirm_round(root).name, "round_003")
+        book = build_book(root)
+        for cmd in emit_confirm_commands(book, 2, 1000, 60):
+            self.assertIn("confirm/round_003/", cmd)
 
     def test_member_with_only_judge_error_rows_has_no_entry(self):
         root = self.make_root()
