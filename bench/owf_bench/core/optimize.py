@@ -308,6 +308,18 @@ verifier, monitor_rail, topology. The live inventory (ids, slots, who carries wh
 
 MANIFEST_ID_RE = r"^[a-z][a-z0-9_]*\.[a-z0-9_]+$"
 
+PROBE_CONTRACT = """
+PROBE (sanctioned pilot runs). Before finalizing, you MAY test your candidate on a few
+specific train tasks:
+  PYTHONPATH={root}/bench python3 {root}/bench/owf_bench/core/runner.py --domain {domain} \\
+    --workflow {candidate} --subset train --task-ids <id1,id2,...> --repeats 1 --workers 4 \\
+    --out {iter_dir}/probe/<name> --max-tokens {max_tokens} --max-wallclock-sec {max_sec}
+Rules: at most 8 probe rollouts per round (they spend real SUT tokens); probe under the SAME
+budgets as the real eval (flags above, do not change them); probe results (probe/<name>/
+results.jsonl, scored) are YOUR private k=1 evidence for this round's decisions — they never
+enter the task book. Spend probes where they decide something: the unsolved residual, or a
+task your change specifically targets. Probing is optional; a well-evidenced round may skip it."""
+
 
 def validate_manifest(manifest: object, inventory: dict) -> list[str]:
     import re
@@ -422,7 +434,8 @@ def codex_evidence_text(opt_root: Path, domain: str, it: int, state: dict) -> st
 
 
 def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir: Path,
-                    opt_model: str, lead_timeout: int, contract_native: bool = False) -> tuple[Path, dict]:
+                    opt_model: str, lead_timeout: int, contract_native: bool = False,
+                    eval_max_tokens: int = 600_000, eval_max_sec: int = 1800) -> tuple[Path, dict]:
     """One optimization round: a single codex session (protocol shared with the meta-harness arm).
 
     The only prompt-level difference from the baseline arm is ORIENTATION_SWARM — the
@@ -439,9 +452,12 @@ def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir:
         f'- Also write {iter_dir}/summary.json: {{"made_candidate": bool, "summary": str, '
         f'"notes": str (optional)}}.'
     )
+    probe_block = PROBE_CONTRACT.format(root=ROOT, domain=domain, candidate=candidate,
+                                        iter_dir=iter_dir, max_tokens=eval_max_tokens,
+                                        max_sec=eval_max_sec) if contract_native else ""
     spec = ArmSpec(
         subject="an agent workflow (a workflow.js orchestration program)",
-        rep_contract=WORKFLOW_REP_CONTRACT + (MANIFEST_CONTRACT if contract_native else ""),
+        rep_contract=WORKFLOW_REP_CONTRACT + (MANIFEST_CONTRACT if contract_native else "") + probe_block,
         evidence_text=codex_evidence_text(opt_root, domain, it, state),
         candidate_path=candidate,
         validate_cmd=f"cd {EXECUTOR} && npx tsx src/run.ts --validate-only {candidate}",
@@ -463,6 +479,9 @@ def run_codex_round(opt_root: Path, domain: str, it: int, state: dict, iter_dir:
             rec["result"] = json.loads(summary_file.read_text())
         except json.JSONDecodeError:
             rec["result"] = summary_file.read_text()[:2000]
+    probe_rollouts = len(list((iter_dir / "probe").glob("*/*__r*"))) if (iter_dir / "probe").exists() else 0
+    if probe_rollouts:
+        rec["probe_rollouts"] = probe_rollouts
     if candidate.exists():
         ok, msg = validate_workflow(candidate)
         if not ok:  # the lead's own validation pass missed; an invalid candidate is a no-candidate round
@@ -706,7 +725,8 @@ def main() -> None:
 
         if args.proposer == "codex":
             candidate, rec = run_codex_round(opt_root, args.domain, it, state, iter_dir,
-                                             args.opt_model, args.opt_max_sec, args.contract_native)
+                                             args.opt_model, args.opt_max_sec, args.contract_native,
+                                             args.eval_max_tokens, args.eval_max_sec)
             made = rec["candidate_made"]
             if made and args.contract_native:
                 inventory = json.loads((opt_root / "lab/components.json").read_text())
