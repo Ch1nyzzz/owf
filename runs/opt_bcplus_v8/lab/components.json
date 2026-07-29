@@ -1,0 +1,131 @@
+{
+  "_readme": [
+    "Component inventory decomposed from opt_bcplus_v8's 11 evaluated members (seed + iter_001..010).",
+    "Hand-audited against the candidate sources on 2026-07-29; every claim is checkable by diffing",
+    "the named files. `members` is the member x component 0/1 matrix; `params` records the per-member",
+    "settings of a parameterised component. `assemblies` re-expresses each member as slot assignments —",
+    "the retro-fitted configs that become real assembly files once the executor gains an assembler.",
+    "Known confounds are listed in `confounds`: attribution must treat those sets as bundles."
+  ],
+  "slots": {
+    "research_prompt": "system prompt of the main investigator node",
+    "decoding": "temperature / thinking settings of the investigator",
+    "turn_budget": "maxTurns of the investigator node",
+    "cutoff_rail": "hard research deadline: onTurn inject + preToolUse block",
+    "closure": "how a deadline-hitting run is converted into an answer",
+    "output_contract": "how the final answer leaves the workflow",
+    "verifier": "optional post-hoc answer checks",
+    "monitor_rail": "optional mid-run trajectory monitors",
+    "topology": "node structure of the workflow"
+  },
+  "components": {
+    "prompt.seed_persistent": {
+      "slot": "research_prompt",
+      "desc": "seed's generic persistent-researcher prompt: vary keywords, reformulate, commit before turns run out"
+    },
+    "prompt.evidence_lead": {
+      "slot": "research_prompt",
+      "desc": "upgraded investigator: rarest-clue anchoring, private candidate ledger, abandon weak query families, stop on decisive clues, exact answer-shape rules (full names, date granularity), never finish empty",
+      "variants": {
+        "final_line": "ends with 'Final answer: <...>' protocol line (1,5,6,7,8,9,10)",
+        "one_line_only": "iter_003: entire final response must be exactly one line"
+      }
+    },
+    "prompt.bounded_researcher": {
+      "slot": "research_prompt",
+      "desc": "iter_002: sole-researcher variant emphasising resolve-the-requested-value (not a related clue) and immediate submit_result"
+    },
+    "prompt.scout_resolver_pair": {
+      "slot": "research_prompt",
+      "desc": "iter_004: scout prompt (fast anchor, dossier handoff) + resolver prompt (verify dossier, resolve remaining links)"
+    },
+    "decode.greedy_nothink": {
+      "slot": "decoding",
+      "desc": "temperature 0 + thinkingLevel 'off'. NOTE: with reasoning:false pi drops thinkingLevel, so thinking stays at the server default — the effective change is temperature only"
+    },
+    "rail.cutoff": {
+      "slot": "cutoff_rail",
+      "desc": "onTurn inject 'research closed, answer now' + preToolUse block from the deadline turn",
+      "params_key": "cutoff_turn"
+    },
+    "closure.post_editor": {
+      "slot": "closure",
+      "desc": "unconditional second node after the lead returns: tool-free exact-answer editor over the report tail (8k chars), schema {answer}; falls back to raw report",
+      "params_key": "editor"
+    },
+    "closure.inhook_editor": {
+      "slot": "closure",
+      "desc": "conditional closure spawned INSIDE onTurn at the deadline: tool-free schema editor over the recent transcript window; on success stops the lead (stop:true) — early finishers never pay for it",
+      "params_key": "closure"
+    },
+    "out.schema_direct": {
+      "slot": "output_contract",
+      "desc": "the investigator itself is schema-bound ({answer, minLength 1}); no separate finalisation"
+    },
+    "out.regex_extractor": {
+      "slot": "output_contract",
+      "desc": "deterministic extractExactAnswer: last 'Final answer:' line, markdown stripped; accepts any non-empty string (no answer-shape validation)"
+    },
+    "verify.exact_name": {
+      "slot": "verifier",
+      "desc": "iter_006: predicate-gated (question asks full/real/baptismal name) 4-turn verifier with tools; word-count guard never shortens the lead's answer"
+    },
+    "rail.starvation_close": {
+      "slot": "monitor_rail",
+      "desc": "iter_008: counts open_doc calls; at turn 48 with <=1 opened document, closes research early (evidence-starved branch only)"
+    },
+    "topo.scout_resolver": {
+      "slot": "topology",
+      "desc": "iter_004: two sequential tool-bearing nodes (scout 25t -> dossier -> resolver 33t) instead of a single lead"
+    }
+  },
+  "members": {
+    "seed":     {"prompt.seed_persistent": 1},
+    "iter_001": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.post_editor": 1},
+    "iter_002": {"prompt.bounded_researcher": 1, "rail.cutoff": 1, "out.schema_direct": 1, "decode.greedy_nothink": 1},
+    "iter_003": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.post_editor": 1},
+    "iter_004": {"prompt.scout_resolver_pair": 1, "topo.scout_resolver": 1, "rail.cutoff": 1, "out.schema_direct": 1, "decode.greedy_nothink": 1},
+    "iter_005": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "out.regex_extractor": 1},
+    "iter_006": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "out.regex_extractor": 1, "verify.exact_name": 1},
+    "iter_007": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.inhook_editor": 1, "out.regex_extractor": 1, "decode.greedy_nothink": 1},
+    "iter_008": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.inhook_editor": 1, "out.regex_extractor": 1, "decode.greedy_nothink": 1, "rail.starvation_close": 1},
+    "iter_009": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.inhook_editor": 1, "out.regex_extractor": 1, "decode.greedy_nothink": 1},
+    "iter_010": {"prompt.evidence_lead": 1, "rail.cutoff": 1, "closure.inhook_editor": 1, "out.regex_extractor": 1, "decode.greedy_nothink": 1}
+  },
+  "params": {
+    "seed":     {"turn_budget": 64},
+    "iter_001": {"turn_budget": 64, "cutoff_turn": 56, "editor": {"window": 8000, "maxTurns": 3}},
+    "iter_002": {"turn_budget": 64, "cutoff_turn": 56},
+    "iter_003": {"turn_budget": 64, "cutoff_turn": 56, "editor": {"window": 8000, "maxTurns": 1},
+                 "prompt_variant": "one_line_only"},
+    "iter_004": {"turn_budget": [25, 33], "cutoff_turn": [20, 26]},
+    "iter_005": {"turn_budget": 62, "cutoff_turn": 56},
+    "iter_006": {"turn_budget": 60, "cutoff_turn": 56},
+    "iter_007": {"turn_budget": 60, "cutoff_turn": 56, "closure": {"window": 16000, "maxTurns": 2}},
+    "iter_008": {"turn_budget": 60, "cutoff_turn": 56, "closure": {"window": 16000, "maxTurns": 2},
+                 "starvation": {"turn": 48, "max_docs": 1}},
+    "iter_009": {"turn_budget": 58, "cutoff_turn": 56, "closure": {"window": 10000, "maxTurns": 1}},
+    "iter_010": {"turn_budget": 56, "cutoff_turn": 52, "closure": {"window": 16000, "maxTurns": 3}}
+  },
+  "assemblies": {
+    "_desc": "each member re-expressed as slot assignments (null = slot empty)",
+    "seed":     {"research_prompt": "prompt.seed_persistent", "decoding": null, "cutoff_rail": null, "closure": null, "output_contract": null, "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_001": {"research_prompt": "prompt.evidence_lead", "decoding": null, "cutoff_rail": "rail.cutoff", "closure": "closure.post_editor", "output_contract": null, "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_002": {"research_prompt": "prompt.bounded_researcher", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": null, "output_contract": "out.schema_direct", "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_003": {"research_prompt": "prompt.evidence_lead", "decoding": null, "cutoff_rail": "rail.cutoff", "closure": "closure.post_editor", "output_contract": null, "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_004": {"research_prompt": "prompt.scout_resolver_pair", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": null, "output_contract": "out.schema_direct", "verifier": null, "monitor_rail": null, "topology": "topo.scout_resolver"},
+    "iter_005": {"research_prompt": "prompt.evidence_lead", "decoding": null, "cutoff_rail": "rail.cutoff", "closure": null, "output_contract": "out.regex_extractor", "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_006": {"research_prompt": "prompt.evidence_lead", "decoding": null, "cutoff_rail": "rail.cutoff", "closure": null, "output_contract": "out.regex_extractor", "verifier": "verify.exact_name", "monitor_rail": null, "topology": "single_lead"},
+    "iter_007": {"research_prompt": "prompt.evidence_lead", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": "closure.inhook_editor", "output_contract": "out.regex_extractor", "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_008": {"research_prompt": "prompt.evidence_lead", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": "closure.inhook_editor", "output_contract": "out.regex_extractor", "verifier": null, "monitor_rail": "rail.starvation_close", "topology": "single_lead"},
+    "iter_009": {"research_prompt": "prompt.evidence_lead", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": "closure.inhook_editor", "output_contract": "out.regex_extractor", "verifier": null, "monitor_rail": null, "topology": "single_lead"},
+    "iter_010": {"research_prompt": "prompt.evidence_lead", "decoding": "decode.greedy_nothink", "cutoff_rail": "rail.cutoff", "closure": "closure.inhook_editor", "output_contract": "out.regex_extractor", "verifier": null, "monitor_rail": null, "topology": "single_lead"}
+  },
+  "confounds": [
+    "rail.cutoff is present in EVERY non-seed member: its effect is only measurable against the seed and is confounded with 'was optimised at all'",
+    "closure.inhook_editor always co-occurs with {out.regex_extractor, decode.greedy_nothink, prompt.evidence_lead} — isolate via iter_005/006 (extractor without closure, default decode)",
+    "topo.scout_resolver == prompt.scout_resolver_pair == {iter_004}: a singleton bundle, no within-run attribution possible",
+    "verify.exact_name == {iter_006} and rail.starvation_close == {iter_008}: singleton components; their effect estimate is one member's delta vs its nearest neighbour (iter_005 / iter_007 respectively)",
+    "out.schema_direct == {iter_002, iter_004}: both also carry decode.greedy_nothink"
+  ]
+}
