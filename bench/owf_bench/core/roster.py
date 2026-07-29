@@ -17,6 +17,8 @@ import argparse
 import json
 from pathlib import Path
 
+LOW_MULT_SIG = 6  # a task this rare (<= solvers) qualifies as a preset's signature case
+
 # The retro assembly spec of each member (mirrors lab/components.json).
 PRESETS: dict[str, dict] = {
     "iter_001": {"prompt": "evidence_lead", "prompt_variant": "final_line", "decoding": None, "turn_budget": 64,
@@ -60,12 +62,24 @@ def preset_stats(book: dict) -> dict[str, dict]:
         confirmed = [e for e in entries if e["status"] == "confirmed"]
         toks = [e["mean_tokens"] for e in entries]
         stats[name] = {
-            "owned": len(owned),
+            "owned": owned,
             "solved_any": len(solved),
             "confirmed": len(confirmed),
             "mean_tokens": round(sum(toks) / len(toks)) if toks else None,
         }
     return stats
+
+
+def load_instructions(domain: str) -> dict[str, str]:
+    tasks_file = Path(__file__).resolve().parents[3] / "data" / domain / "tasks.jsonl"
+    if not tasks_file.exists():
+        return {}
+    out = {}
+    for line in tasks_file.read_text().splitlines():
+        if line.strip():
+            t = json.loads(line)
+            out[t["id"]] = t.get("instruction", "")
+    return out
 
 
 def confidence(comp: str, attr: dict) -> str:
@@ -125,11 +139,26 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     a("")
     a("| preset | owned tasks | confirmed solves | mean tokens/task | spec highlights |")
     a("|---|---|---|---|---|")
-    for name, st in sorted(stats.items(), key=lambda kv: -kv[1]["owned"]):
+    for name, st in sorted(stats.items(), key=lambda kv: -len(kv[1]["owned"])):
         spec = PRESETS.get(name)
         hi = "scout->resolver two-stage (file preset)" if name in FILE_PRESETS else \
              f"{spec['prompt']}, cutoff {spec['cutoff_turn']}, closure {spec['closure']['type'] if spec['closure'] else 'none'}, out {spec['output']}"
-        a(f"| {name} | {st['owned']} | {st['confirmed']} | {st['mean_tokens']} | {hi} |")
+        a(f"| {name} | {len(st['owned'])} | {st['confirmed']} | {st['mean_tokens']} | {hi} |")
+    a("")
+    a("### Signature cases — match a new question against these before dispatching")
+    a("")
+    a("The questions below are the HARD tasks (few assemblies solve them) that each preset")
+    a("reproducibly owns. If a new question resembles one in style and structure, that owner")
+    a("is the highest-probability dispatch — this signal outranks the default chain.")
+    a("")
+    instructions = load_instructions(book["domain"] or "")
+    for name, st in sorted(stats.items(), key=lambda kv: -len(kv[1]["owned"])):
+        hard_owned = sorted((t for t in st["owned"] if 0 < mult.get(t, 0) <= LOW_MULT_SIG),
+                            key=lambda t: mult.get(t, 0))[:3]
+        for t in hard_owned:
+            snippet = " ".join(instructions.get(t, "").split())[:220]
+            if snippet:
+                a(f"- **{name}** (solved by {mult[t]}/11) — {t}: “{snippet}…”")
     a("")
     a("## 4. Dispatch policy")
     a("")

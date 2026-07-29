@@ -46,14 +46,33 @@ SPEC_HELP = """Assembly spec fields (JSON):
 
 
 def call_meta(prompt: str, cfg: dict) -> tuple[str, dict]:
+    # max_tokens must leave room for server-default thinking: models that bill
+    # reasoning inside the completion return EMPTY content at small budgets —
+    # exactly how flash "failed" the first smoke test. Match the per-completion
+    # cap the SUT nodes get (32768); the cap costs nothing unless used.
+    max_tokens = int(cfg.get("max_tokens") or 32768)
+    if cfg.get("format") == "anthropic":
+        payload = {"model": cfg["model"], "max_tokens": max_tokens, "temperature": 0.2,
+                   "messages": [{"role": "user", "content": prompt}]}
+        req = urllib.request.Request(
+            f"{cfg['base_url'].rstrip('/')}/v1/messages",
+            data=json.dumps(payload).encode(),
+            headers={"x-api-key": cfg["key"], "anthropic-version": "2023-06-01",
+                     "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            body = json.load(resp)
+        usage = body.get("usage") or {}
+        text = "".join(b.get("text", "") for b in body.get("content", []) if b.get("type") == "text")
+        return text, {"total_tokens": int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)}
     payload = {"model": cfg["model"], "messages": [{"role": "user", "content": prompt}],
-               "temperature": 0.2, "max_tokens": 2048}
+               "temperature": 0.2, "max_tokens": max_tokens}
     req = urllib.request.Request(
         f"{cfg['base_url'].rstrip('/')}/chat/completions",
         data=json.dumps(payload).encode(),
         headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=180) as resp:
+    with urllib.request.urlopen(req, timeout=300) as resp:
         body = json.load(resp)
     usage = body.get("usage") or {}
     return body["choices"][0]["message"]["content"], usage
@@ -147,6 +166,9 @@ def main() -> None:
     p.add_argument("--meta-base-url", default=os.environ.get("META_BASE_URL", "https://api.gpugeek.com/v1"))
     p.add_argument("--meta-model", default=os.environ.get("META_MODEL", "Vendor3/DeepSeek-V4-Flash"))
     p.add_argument("--meta-key-env", default=os.environ.get("META_KEY_ENV", "SOLVER_API_KEY"))
+    p.add_argument("--meta-format", choices=["openai", "anthropic"],
+                   default=os.environ.get("META_FORMAT", "openai"))
+    p.add_argument("--meta-max-tokens", type=int, default=int(os.environ.get("META_MAX_TOKENS", 32768)))
     args = p.parse_args()
 
     opt_root = Path(args.opt_root).resolve()
@@ -156,7 +178,8 @@ def main() -> None:
     playbook = (opt_root / "lab/playbook.md").read_text()
     domain = book["domain"]
     cfg = {"base_url": args.meta_base_url, "model": args.meta_model,
-           "key": os.environ.get(args.meta_key_env, "")}
+           "key": os.environ.get(args.meta_key_env, ""), "format": args.meta_format,
+           "max_tokens": args.meta_max_tokens}
 
     from owf_bench.core.runner import load_dotenv, load_tasks
     load_dotenv()
