@@ -28,10 +28,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from owf_bench.core.assemble import render, validate_spec
-from owf_bench.core.roster import FILE_PRESETS, PRESETS
+from owf_bench.core.roster import preset_workflows
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_PRESET = "iter_001"
 
 SPEC_HELP = """Assembly spec fields (JSON):
   prompt: "evidence_lead" | "seed_persistent" | "bounded_researcher"
@@ -80,17 +79,18 @@ def call_meta(prompt: str, cfg: dict) -> tuple[str, dict]:
     return body["choices"][0]["message"]["content"], usage
 
 
-def parse_decision(text: str) -> dict:
+def parse_decision(text: str, presets: dict[str, str], allow_novel: bool) -> dict:
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
         raise ValueError("no JSON object in meta response")
     decision = json.loads(m.group(0))
     if "preset" in decision:
-        name = decision["preset"]
-        if name not in PRESETS and name not in FILE_PRESETS:
-            raise ValueError(f"unknown preset: {name}")
+        if decision["preset"] not in presets:
+            raise ValueError(f"unknown preset: {decision['preset']} (valid: {sorted(presets)})")
         return decision
     if "assembly" in decision:
+        if not allow_novel:
+            raise ValueError("novel assemblies are disabled here; reply with a preset")
         errors = validate_spec(decision["assembly"])
         if errors:
             raise ValueError("; ".join(errors))
@@ -98,12 +98,15 @@ def parse_decision(text: str) -> dict:
     raise ValueError("decision must contain 'preset' or 'assembly'")
 
 
-def decide(task: dict, playbook: str, cfg: dict) -> tuple[dict, dict]:
+def decide(task: dict, playbook: str, cfg: dict, presets: dict[str, str],
+           allow_novel: bool, default_preset: str) -> tuple[dict, dict]:
+    spec_part = f"\n\n---\n{SPEC_HELP}" if allow_novel else ""
+    reply_forms = ('{"preset": "<name>", "reason": "..."} or {"assembly": {<spec>}, "reason": "..."}'
+                   if allow_novel else '{"preset": "<name>", "reason": "..."}')
     base = (
-        f"{playbook}\n\n---\n{SPEC_HELP}\n\n---\n"
+        f"{playbook}{spec_part}\n\n---\n"
         f"Question to dispatch:\n{task['instruction']}\n\n"
-        "Decide the workflow for THIS question. Reply with ONLY a JSON object: "
-        '{"preset": "<name>", "reason": "..."} or {"assembly": {<spec>}, "reason": "..."}.'
+        f"Decide the workflow for THIS question. Reply with ONLY a JSON object: {reply_forms}."
     )
     meta_stats = {"tokens": 0, "retries": 0, "fallback": False}
     prompt = base
@@ -111,25 +114,23 @@ def decide(task: dict, playbook: str, cfg: dict) -> tuple[dict, dict]:
         try:
             text, usage = call_meta(prompt, cfg)
             meta_stats["tokens"] += int(usage.get("total_tokens") or 0)
-            decision = parse_decision(text)
+            decision = parse_decision(text, presets, allow_novel)
             meta_stats["retries"] = attempt
             return decision, meta_stats
         except Exception as exc:  # noqa: BLE001 — any failure funnels into retry/fallback
             err = str(exc)[:400]
             prompt = base + f"\n\nYour previous reply was invalid ({err}). Reply with ONLY the JSON object."
     meta_stats["fallback"] = True
-    return {"preset": DEFAULT_PRESET, "reason": f"fallback after invalid responses"}, meta_stats
+    return {"preset": default_preset, "reason": "fallback after invalid responses"}, meta_stats
 
 
-def materialize(decision: dict, opt_root: Path, dest: Path, name: str) -> str:
+def materialize(decision: dict, presets: dict[str, str], dest: Path, name: str) -> str:
+    """Presets dispatch the member's ORIGINAL workflow file — the exact artifact
+    the book's evidence measured — so no assembler fidelity question arises."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if "preset" in decision:
-        preset = decision["preset"]
-        if preset in FILE_PRESETS:
-            shutil.copy(opt_root / FILE_PRESETS[preset], dest)
-        else:
-            dest.write_text(render(PRESETS[preset], name))
-        return f"preset:{preset}"
+        shutil.copy(presets[decision["preset"]], dest)
+        return f"preset:{decision['preset']}"
     dest.write_text(render(decision["assembly"], name))
     return "novel"
 
@@ -149,12 +150,12 @@ def run_task(task_id: str, workflow: Path, domain: str, out_dir: Path, repeats: 
     return json.loads(report.read_text())
 
 
-def reference_scores(book: dict, task_id: str) -> dict:
+def reference_scores(book: dict, task_id: str, champion: str | None) -> dict:
     rec = book["tasks"].get(task_id, {})
     entries = rec.get("entries", {})
-    pick = lambda m: entries[m]["pass_rate"] if m in entries else None
+    pick = lambda m: entries[m]["pass_rate"] if m and m in entries else None
     return {"owner": rec.get("owner"), "owner_rate": pick(rec.get("owner")),
-            "champion_rate": pick("iter_007"), "seed_rate": pick("seed")}
+            "champion_rate": pick(champion), "seed_rate": pick("seed")}
 
 
 def main() -> None:
@@ -172,6 +173,9 @@ def main() -> None:
     p.add_argument("--meta-format", choices=["openai", "anthropic"],
                    default=os.environ.get("META_FORMAT", "openai"))
     p.add_argument("--meta-max-tokens", type=int, default=int(os.environ.get("META_MAX_TOKENS", 32768)))
+    p.add_argument("--allow-novel", action="store_true",
+                   help="permit {'assembly': ...} decisions (needs an assembler vocabulary for this domain)")
+    p.add_argument("--champion-member", default=None, help="member used as the champion reference line")
     args = p.parse_args()
 
     opt_root = Path(args.opt_root).resolve()
@@ -189,21 +193,23 @@ def main() -> None:
     cfg["key"] = cfg["key"] or os.environ.get(args.meta_key_env, "")
     wanted = [t.strip() for t in args.task_ids.split(",")] if args.task_ids else sorted(book["tasks"])
     tasks = {t["id"]: t for t in load_tasks(domain, "train", None, wanted)}
+    presets = preset_workflows(book)
+    default_preset = book["cover_set"][0]["member"] if book.get("cover_set") else "seed"
 
     write_lock = threading.Lock()
     records: list[dict] = []
 
     def process(tid: str) -> dict:
-        decision, meta_stats = decide(tasks[tid], playbook, cfg)
+        decision, meta_stats = decide(tasks[tid], playbook, cfg, presets, args.allow_novel, default_preset)
         wf = out_root / "assembled" / f"{tid}.js"
-        kind = materialize(decision, opt_root, wf, f"meta-{tid}")
+        kind = materialize(decision, presets, wf, f"meta-{tid}")
         report = run_task(tid, wf, domain, out_root / "rollouts" / tid, args.repeats,
                           args.max_tokens, args.max_sec)
         score = report["task_scores"].get(tid) if report else None
         rec = {"task": tid, "choice": kind, "reason": str(decision.get("reason", ""))[:300],
                "meta": meta_stats, "score": score,
                "tokens": report["task_tokens"].get(tid) if report and "task_tokens" in report else None,
-               "refs": reference_scores(book, tid)}
+               "refs": reference_scores(book, tid, args.champion_member)}
         if "assembly" in decision:
             rec["assembly"] = decision["assembly"]
         return rec

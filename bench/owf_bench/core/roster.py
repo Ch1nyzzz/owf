@@ -19,8 +19,12 @@ from pathlib import Path
 
 LOW_MULT_SIG = 6  # a task this rare (<= solvers) qualifies as a preset's signature case
 
-# The retro assembly spec of each member (mirrors lab/components.json).
-PRESETS: dict[str, dict] = {
+# Presets are the book's members, dispatched as their ORIGINAL workflow files —
+# the ledger's evidence was produced by those exact files, so dispatching them
+# sidesteps assembler fidelity entirely. The retro specs below remain only as
+# documentation of the v8 decomposition (assemble.py's novel path uses their
+# vocabulary); they are NOT the dispatch mechanism.
+V8_RETRO_SPECS: dict[str, dict] = {
     "iter_001": {"prompt": "evidence_lead", "prompt_variant": "final_line", "decoding": None, "turn_budget": 64,
                  "cutoff_turn": 56, "closure": {"type": "post_editor", "window": 8000, "maxTurns": 3},
                  "output": "raw", "verifier": None, "monitor": None},
@@ -48,14 +52,14 @@ PRESETS: dict[str, dict] = {
     "seed":     {"prompt": "seed_persistent", "decoding": None, "turn_budget": 64, "cutoff_turn": None,
                  "closure": None, "output": "raw", "verifier": None, "monitor": None},
 }
-# iter_004 (scout->resolver topology) is not expressible by the v1 assembler;
-# it stays available only as a whole-file preset.
-FILE_PRESETS = {"iter_004": "iter_004/candidate.js"}
+def preset_workflows(book: dict) -> dict[str, str]:
+    """member -> original workflow file (the artifact the book's evidence measured)."""
+    return {name: meta["workflow"] for name, meta in book["members"].items()}
 
 
 def preset_stats(book: dict) -> dict[str, dict]:
     stats: dict[str, dict] = {}
-    for name in list(PRESETS) + list(FILE_PRESETS):
+    for name in book["members"]:
         owned = [t for t, rec in book["tasks"].items() if rec["owner"] == name]
         entries = [rec["entries"][name] for rec in book["tasks"].values() if name in rec["entries"]]
         solved = [e for e in entries if e["passes"] > 0]
@@ -68,6 +72,12 @@ def preset_stats(book: dict) -> dict[str, dict]:
             "mean_tokens": round(sum(toks) / len(toks)) if toks else None,
         }
     return stats
+
+
+def member_highlights(lab: dict, member: str) -> str:
+    comps = [cid for cid, on in lab.get("members", {}).get(member, {}).items() if on]
+    key = [c for c in comps if c.split(".")[0] in ("topology", "closure", "prompt")][:3]
+    return ", ".join(key) if key else "seed baseline"
 
 
 def load_instructions(domain: str) -> dict[str, str]:
@@ -137,13 +147,10 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     a("")
     a("## 3. Presets (proven assemblies, ranked by confirmed holdings)")
     a("")
-    a("| preset | owned tasks | confirmed solves | mean tokens/task | spec highlights |")
+    a("| preset | owned tasks | confirmed solves | mean tokens/task | key components |")
     a("|---|---|---|---|---|")
     for name, st in sorted(stats.items(), key=lambda kv: -len(kv[1]["owned"])):
-        spec = PRESETS.get(name)
-        hi = "scout->resolver two-stage (file preset)" if name in FILE_PRESETS else \
-             f"{spec['prompt']}, cutoff {spec['cutoff_turn']}, closure {spec['closure']['type'] if spec['closure'] else 'none'}, out {spec['output']}"
-        a(f"| {name} | {len(st['owned'])} | {st['confirmed']} | {st['mean_tokens']} | {hi} |")
+        a(f"| {name} | {len(st['owned'])} | {st['confirmed']} | {st['mean_tokens']} | {member_highlights(lab, name)} |")
     a("")
     a("### Signature cases — match a new question against these before dispatching")
     a("")
@@ -162,15 +169,14 @@ def render_playbook(book: dict, lab: dict, attr: dict) -> str:
     a("")
     a("## 4. Dispatch policy")
     a("")
-    a("1. DEFAULT: preset `iter_001` (largest confirmed coverage). Escalation chain when a task looks")
-    a("   hard for it: iter_001 -> iter_003 -> iter_009 -> seed (the minimal set that covers every")
-    a("   solved training task).")
-    a("2. Person-name questions asking full/real/baptismal names: consider `verifier: exact_name`.")
-    a("3. Compose a NOVEL assembly only when triage finds no preset whose record covers this task type.")
-    a("   Novel specs must reuse proven param values; validation will reject contract violations, and an")
-    a("   invalid spec falls back to the default preset.")
-    a("4. Output format: JSON, either {\"preset\": \"iter_001\", \"reason\": \"...\"} or")
-    a("   {\"assembly\": {<spec per the schema you were given>}, \"reason\": \"...\"}.")
+    chain = [c["member"] for c in book["cover_set"]]
+    default = chain[0] if chain else "seed"
+    a(f"1. DEFAULT: preset `{default}`. Escalation chain when a task looks hard for it: "
+      f"{' -> '.join(chain)} (the minimal set that covers every solved training task).")
+    a("2. A signature-case match (section 3) outranks the default chain: dispatch that owner.")
+    a("3. Prefer the cheaper of two presets with equal claim; never leave a question unanswered.")
+    a(f"4. Output format: JSON: {{\"preset\": \"{default}\", \"reason\": \"...\"}} — a preset name from "
+      "section 3 (only emit an {\"assembly\": ...} object if the interface you were given explicitly allows it).")
     a("")
     a("## 5. Boundaries and warnings")
     a("")
