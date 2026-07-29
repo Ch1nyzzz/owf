@@ -79,27 +79,58 @@ def call_meta(prompt: str, cfg: dict) -> tuple[str, dict]:
     return body["choices"][0]["message"]["content"], usage
 
 
+def _json_candidates(text: str):
+    """Yield parseable JSON objects from a model reply, most-likely first:
+    fenced ```json blocks, then balanced top-level {...} spans (last to first —
+    models often restate the final answer at the end)."""
+    for m in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        yield m.group(1)
+    spans, depth, start = [], 0, None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                spans.append(text[start:i + 1])
+    yield from reversed(spans)
+
+
 def parse_decision(text: str, presets: dict[str, str], allow_novel: bool) -> dict:
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
-        raise ValueError("no JSON object in meta response")
-    decision = json.loads(m.group(0))
+    if not text.strip():
+        raise ValueError("empty meta response (content had no text blocks)")
+    decision = None
+    for cand in _json_candidates(text):
+        try:
+            obj = json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and ("preset" in obj or "assembly" in obj):
+            decision = obj
+            break
+    if decision is None:
+        raise ValueError("no JSON object with 'preset' or 'assembly' in meta response")
     if "preset" in decision:
-        if decision["preset"] not in presets:
-            raise ValueError(f"unknown preset: {decision['preset']} (valid: {sorted(presets)})")
+        raw = str(decision["preset"]).strip()
+        # normalise the common mangles: "preset:iter_002", "Seed", trailing notes
+        name = raw.removeprefix("preset:").strip()
+        matches = [p for p in presets if p.lower() == name.lower()]
+        if not matches:
+            raise ValueError(f"unknown preset: {raw} (valid: {sorted(presets)})")
+        decision["preset"] = matches[0]
         return decision
-    if "assembly" in decision:
-        if not allow_novel:
-            raise ValueError("novel assemblies are disabled here; reply with a preset")
-        errors = validate_spec(decision["assembly"])
-        if errors:
-            raise ValueError("; ".join(errors))
-        return decision
-    raise ValueError("decision must contain 'preset' or 'assembly'")
+    if not allow_novel:
+        raise ValueError("novel assemblies are disabled here; reply with a preset")
+    errors = validate_spec(decision["assembly"])
+    if errors:
+        raise ValueError("; ".join(errors))
+    return decision
 
 
 def decide(task: dict, playbook: str, cfg: dict, presets: dict[str, str],
-           allow_novel: bool, default_preset: str) -> tuple[dict, dict]:
+           allow_novel: bool, default_preset: str, log_dir: Path | None = None) -> tuple[dict, dict]:
     spec_part = f"\n\n---\n{SPEC_HELP}" if allow_novel else ""
     reply_forms = ('{"preset": "<name>", "reason": "..."} or {"assembly": {<spec>}, "reason": "..."}'
                    if allow_novel else '{"preset": "<name>", "reason": "..."}')
@@ -109,18 +140,34 @@ def decide(task: dict, playbook: str, cfg: dict, presets: dict[str, str],
         f"Decide the workflow for THIS question. Reply with ONLY a JSON object: {reply_forms}."
     )
     meta_stats = {"tokens": 0, "retries": 0, "fallback": False}
+    attempts_log = []
     prompt = base
+
+    def dump_log():
+        if log_dir:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / f"{task['id']}.json").write_text(
+                json.dumps(attempts_log, ensure_ascii=False, indent=1))
+
     for attempt in range(2):
+        entry = {"attempt": attempt}
         try:
             text, usage = call_meta(prompt, cfg)
+            entry["response"] = text[-4000:]
             meta_stats["tokens"] += int(usage.get("total_tokens") or 0)
             decision = parse_decision(text, presets, allow_novel)
             meta_stats["retries"] = attempt
+            attempts_log.append(entry)
+            dump_log()
             return decision, meta_stats
         except Exception as exc:  # noqa: BLE001 — any failure funnels into retry/fallback
             err = str(exc)[:400]
+            entry["error"] = err
+            attempts_log.append(entry)
+            meta_stats["last_error"] = err
             prompt = base + f"\n\nYour previous reply was invalid ({err}). Reply with ONLY the JSON object."
     meta_stats["fallback"] = True
+    dump_log()
     return {"preset": default_preset, "reason": "fallback after invalid responses"}, meta_stats
 
 
@@ -200,7 +247,8 @@ def main() -> None:
     records: list[dict] = []
 
     def process(tid: str) -> dict:
-        decision, meta_stats = decide(tasks[tid], playbook, cfg, presets, args.allow_novel, default_preset)
+        decision, meta_stats = decide(tasks[tid], playbook, cfg, presets, args.allow_novel,
+                                      default_preset, log_dir=out_root / "meta_log")
         wf = out_root / "assembled" / f"{tid}.js"
         kind = materialize(decision, presets, wf, f"meta-{tid}")
         report = run_task(tid, wf, domain, out_root / "rollouts" / tid, args.repeats,
