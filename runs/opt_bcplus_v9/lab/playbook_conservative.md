@@ -137,19 +137,12 @@ Stylistic resemblance is NOT enough; when unsure, the question goes to the gener
 
 ## 4. Dispatch policy
 
-Judge EVERY question on its own evidence and pick the preset with the strongest claim —
-there is no default reflex. Weigh, in order of evidential strength:
-1. Signature-case match (section 3): a question resembling a preset's owned hard case in
-   structure and style is that preset's to take. EXCEPTION — [thin evidence] presets:
-   dispatch only on a near-verbatim match of their single case; resemblance is not enough.
-2. Preset records (section 3 table): owned tasks, confirmed solves, and key components —
-   match the question's demands (answer shape, verification depth, anchor rarity) to what
-   a preset's components are built for.
-3. `seed` is the proven generalist with the widest confirmed record: choose it when no
-   specialist has a STRONGER claim — as a judgement, not a habit. When two presets have equal
-   claim, take the cheaper one. Never leave a question unanswered.
-4. Output format: JSON: {"preset": "<name>", "reason": "..."} — any preset from section 3
-   (only emit an {"assembly": ...} object if the interface you were given explicitly allows it).
+1. DEFAULT: preset `seed`. Escalation chain when a task looks hard for it: seed -> iter_001 -> iter_003 -> iter_010 (the minimal set that covers every solved training task).
+2. A signature-case match (section 3) outranks the default chain: dispatch that owner.
+   EXCEPTION — [thin evidence] presets: dispatch only on a near-verbatim match of their
+   single case; a merely similar style stays with the default chain.
+3. Prefer the cheaper of two presets with equal claim; never leave a question unanswered.
+4. Output format: JSON: {"preset": "seed", "reason": "..."} — a preset name from section 3 (only emit an {"assembly": ...} object if the interface explicitly allows it).
 
 ## 5. Boundaries and warnings
 

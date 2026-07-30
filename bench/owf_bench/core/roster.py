@@ -105,6 +105,18 @@ def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -
     cov = book["coverage"]
     mult = attr["multiplicity"]
     stats = preset_stats(book)
+    n_members = len(book["member_order"])
+    # A preset's signature cases are the hard tasks it reproducibly owns. One
+    # case is an anecdote, not a specialty: the held-out exam's only losing
+    # dispatch pocket (iter_003, 0/2) came from generalising a single signature
+    # case into a whole question style. Presets below this bar are marked thin
+    # and the dispatch policy restricts them to near-verbatim matches.
+    sig_cases = {
+        name: sorted((t for t in st["owned"] if 0 < mult.get(t, 0) <= LOW_MULT_SIG),
+                     key=lambda t: mult.get(t, 0))[:3]
+        for name, st in stats.items()
+    }
+    thin = {name for name, cases in sig_cases.items() if len(cases) < 2}
     lines: list[str] = []
     a = lines.append
 
@@ -118,9 +130,9 @@ def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -
     a("")
     n_easy = sum(1 for v in mult.values() if v >= 9)
     n_hard = sum(1 for v in mult.values() if 0 < v <= 5)
-    a(f"- Of solved tasks, {n_easy} are solved by nearly every assembly (>=9/11) — for these, ANY")
+    a(f"- Of solved tasks, {n_easy} are solved by nearly every assembly (>=9/{n_members}) — for these, ANY")
     a("  reliable preset works; cost is the tiebreaker, not a reason to skip judgement.")
-    a(f"- {n_hard} tasks are solved by few assemblies (<=5/11) — only here does component choice matter.")
+    a(f"- {n_hard} tasks are solved by few assemblies (<=5/{n_members}) — only here does component choice matter.")
     a("- Hard-task signals: many interlocking clues with no rare anchor phrase; person-name questions")
     a("  demanding full/formal names; questions whose decisive evidence needs long verification chains.")
     a(f"- {len(cov['unsolved'])} training tasks were solved by NO assembly ({', '.join(cov['unsolved'])}).")
@@ -158,14 +170,18 @@ def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -
     a("reproducibly owns. If a new question resembles one in style and structure, that owner")
     a("is the highest-probability dispatch — this signal outranks the default chain.")
     a("")
+    a("A preset with a SINGLE signature case is marked [thin evidence]: one case is an anecdote,")
+    a("not a specialty. Dispatch a [thin evidence] preset ONLY when the new question is a")
+    a("near-verbatim match of its case — same entity type, same answer shape, same clue structure.")
+    a("Stylistic resemblance is NOT enough; when unsure, the question goes to the generalist.")
+    a("")
     instructions = load_instructions(book["domain"] or "")
     for name, st in sorted(stats.items(), key=lambda kv: -len(kv[1]["owned"])):
-        hard_owned = sorted((t for t in st["owned"] if 0 < mult.get(t, 0) <= LOW_MULT_SIG),
-                            key=lambda t: mult.get(t, 0))[:3]
-        for t in hard_owned:
+        tag = " [thin evidence]" if name in thin and sig_cases[name] else ""
+        for t in sig_cases[name]:
             snippet = " ".join(instructions.get(t, "").split())[:220]
             if snippet:
-                a(f"- **{name}** (solved by {mult[t]}/11) — {t}: “{snippet}…”")
+                a(f"- **{name}**{tag} (solved by {mult[t]}/{n_members}) — {t}: “{snippet}…”")
     a("")
     a("## 4. Dispatch policy")
     a("")
@@ -175,6 +191,8 @@ def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -
         a(f"1. DEFAULT: preset `{generalist}`. Escalation chain when a task looks hard for it: "
           f"{' -> '.join(chain)} (the minimal set that covers every solved training task).")
         a("2. A signature-case match (section 3) outranks the default chain: dispatch that owner.")
+        a("   EXCEPTION — [thin evidence] presets: dispatch only on a near-verbatim match of their")
+        a("   single case; a merely similar style stays with the default chain.")
         a("3. Prefer the cheaper of two presets with equal claim; never leave a question unanswered.")
         a(f"4. Output format: JSON: {{\"preset\": \"{generalist}\", \"reason\": \"...\"}} — a preset name from "
           "section 3 (only emit an {\"assembly\": ...} object if the interface explicitly allows it).")
@@ -183,7 +201,8 @@ def render_playbook(book: dict, lab: dict, attr: dict, doctrine: str = "free") -
         a("Judge EVERY question on its own evidence and pick the preset with the strongest claim —")
         a("there is no default reflex. Weigh, in order of evidential strength:")
         a("1. Signature-case match (section 3): a question resembling a preset's owned hard case in")
-        a("   structure and style is that preset's to take.")
+        a("   structure and style is that preset's to take. EXCEPTION — [thin evidence] presets:")
+        a("   dispatch only on a near-verbatim match of their single case; resemblance is not enough.")
         a("2. Preset records (section 3 table): owned tasks, confirmed solves, and key components —")
         a("   match the question's demands (answer shape, verification depth, anchor rarity) to what")
         a("   a preset's components are built for.")
