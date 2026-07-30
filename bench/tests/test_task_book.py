@@ -195,6 +195,31 @@ class TestBuildBook(unittest.TestCase):
         self.assertNotIn("iter_004", book["tasks"].get("t3", {}).get("entries", {}))
         self.assertIn("t3", book["coverage"]["unsolved"])
 
+    def test_imports_fold_last_and_carry_foreign_evidence(self):
+        # An external member from lab/imports.json merges its declared evidence
+        # verbatim; folding last, it must strictly beat a local incumbent to own.
+        root = self.make_root()
+        foreign = Path(tempfile.mkdtemp())
+        write_source(foreign / "eval", "ext.js",
+                     {"t1": [(1.0, 100), (1.0, 100)],   # confirmed but not cheaper: no takeover
+                      "t3": [(1.0, 80)]})               # claims the locally unsolved task
+        (root / "lab").mkdir()
+        (root / "lab/imports.json").write_text(json.dumps(
+            {"ext_a": {"workflow": "ext.js", "sources": [str(foreign / "eval")]}}))
+        book = build_book(root)
+        self.assertEqual(book["member_order"][-1], "ext_a")
+        self.assertEqual(book["tasks"]["t1"]["owner"], "seed")
+        self.assertEqual(book["tasks"]["t3"]["owner"], "ext_a")
+        self.assertEqual(book["coverage"]["union"], 3)
+
+    def test_import_with_missing_evidence_raises(self):
+        root = self.make_root()
+        (root / "lab").mkdir()
+        (root / "lab/imports.json").write_text(json.dumps(
+            {"ext_a": {"workflow": "ext.js", "sources": [str(root / "nowhere")]}}))
+        with self.assertRaises(FileNotFoundError):
+            build_book(root)
+
 
 if __name__ == "__main__":
     unittest.main()

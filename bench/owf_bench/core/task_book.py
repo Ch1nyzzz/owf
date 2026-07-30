@@ -110,8 +110,30 @@ def beats(challenger: dict, owner: dict, token_margin: float) -> tuple[bool, str
     return False, ""
 
 
+def load_imports(opt_root: Path) -> list[dict]:
+    """External members declared in lab/imports.json (cross-generation roster merge).
+
+    Format: {"v8_iter_007": {"workflow": "<candidate.js>", "sources": ["<dir>", ...]}}.
+    Sources are runner output dirs from ANOTHER opt run on the SAME task split —
+    the evidence merges verbatim, no re-rollout. Imports fold in AFTER local
+    members, so an import must strictly beat a local incumbent to own a task.
+    """
+    imports_file = opt_root / "lab" / "imports.json"
+    if not imports_file.exists():
+        return []
+    members = []
+    for name, spec in json.loads(imports_file.read_text()).items():
+        sources = [Path(s) for s in spec["sources"]]
+        missing = [s for s in sources if not (s / "results.jsonl").exists()]
+        if missing:
+            raise FileNotFoundError(f"import {name}: no results.jsonl in {missing}")
+        members.append({"name": name, "workflow": spec["workflow"], "sources": sources})
+    return members
+
+
 def discover_members(opt_root: Path) -> list[dict]:
-    """Evaluated members in canonical fold order: seed first, then iterations.
+    """Evaluated members in canonical fold order: seed first, then iterations,
+    then imports from lab/imports.json.
 
     Each member's evidence is its eval dir plus, if present, its targeted
     confirmation dir under confirm/<member>/.
@@ -138,6 +160,14 @@ def discover_members(opt_root: Path) -> list[dict]:
         candidates = [opt_root / "confirm" / m["name"],
                       *sorted(opt_root.glob(f"confirm/round_*/{m['name']}"))]
         m["sources"] += [c for c in candidates if (c / "results.jsonl").exists()]
+    # Imports list their evidence dirs explicitly (foreign confirm layouts vary);
+    # the local confirm/ scan above must not apply to them. But confirmation runs
+    # for an import made HERE land in confirm/*/<import_name> like anyone else's.
+    for m in load_imports(opt_root):
+        candidates = [opt_root / "confirm" / m["name"],
+                      *sorted(opt_root.glob(f"confirm/round_*/{m['name']}"))]
+        m["sources"] += [c for c in candidates if (c / "results.jsonl").exists()]
+        members.append(m)
     return members
 
 
